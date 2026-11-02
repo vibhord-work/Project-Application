@@ -1,0 +1,27 @@
+# Environment and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+build/
+
+# Temporary and backup files
+*.bak
+*.log
+
+# Editor and OS files
+.vscode/
+.DS_Store
+
+# Original database setup notebooks
+database_files/
+
+# Demonstration media
+*.mp4
