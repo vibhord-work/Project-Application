@@ -6,6 +6,20 @@ const app = express()
 app.use(cors())
 app.use(express.json())
 
+// Accept /api/* requests from the AWS Application Load Balancer
+app.use((req, res, next) => {
+    if (req.url === '/api') {
+        req.url = '/'
+    } else if (req.url.startsWith('/api/')) {
+        req.url = req.url.slice(4)
+    }
+    next()
+})
+
+app.get('/health', (req, res) => {
+    res.status(200).json({ status: 'healthy' })
+})
+
 const db = mysql.createConnection({
     host: process.env.DB_HOST || "127.0.0.1",
     port: Number(process.env.DB_PORT || 3306),
@@ -327,7 +341,6 @@ app.delete('/deleteStaff/:id', (request, result) => {
         }
     })
 })
-
 
 app.delete('/deleteWard/:id', (request, result) => {
     const wardId = request.params.id;
