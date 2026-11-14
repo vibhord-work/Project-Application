@@ -69,13 +69,13 @@ pipeline {
                           docker login --username AWS --password-stdin "$REGISTRY"
 
                         docker tag hospital-frontend:build-${BUILD_NUMBER}-${GIT_COMMIT} \
-                          "$REGISTRY/$FRONTEND_REPO:$BUILD_NUMBER"
+                          "$REGISTRY/$FRONTEND_REPO:build-${BUILD_NUMBER}-${GIT_COMMIT}"
 
                         docker tag hospital-backend:build-${BUILD_NUMBER}-${GIT_COMMIT} \
-                          "$REGISTRY/$BACKEND_REPO:$BUILD_NUMBER"
+                          "$REGISTRY/$BACKEND_REPO:build-${BUILD_NUMBER}-${GIT_COMMIT}"
 
-                        docker push "$REGISTRY/$FRONTEND_REPO:$BUILD_NUMBER"
-                        docker push "$REGISTRY/$BACKEND_REPO:$BUILD_NUMBER"
+                        docker push "$REGISTRY/$FRONTEND_REPO:build-${BUILD_NUMBER}-${GIT_COMMIT}"
+                        docker push "$REGISTRY/$BACKEND_REPO:build-${BUILD_NUMBER}-${GIT_COMMIT}"
                     '''
             }
         }
@@ -94,7 +94,7 @@ pipeline {
                             SERVICE="$3"
                             REPOSITORY="$4"
 
-                            IMAGE="$REGISTRY/$REPOSITORY:$BUILD_NUMBER"
+                            IMAGE="$REGISTRY/$REPOSITORY:build-${BUILD_NUMBER}-${GIT_COMMIT}"
 
                             echo "Deploying $SERVICE with image $IMAGE"
 
