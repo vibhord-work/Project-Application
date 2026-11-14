@@ -1,0 +1,10 @@
+FROM 460249938865.dkr.ecr.us-east-1.amazonaws.com/project-poc-backend:5
+
+USER root
+COPY database/init/01-schema.sql /app/01-schema.sql
+COPY database/scripts/init-db.js /app/init-db.js
+
+RUN chown node:node /app/01-schema.sql /app/init-db.js
+
+USER node
+CMD ["node", "/app/init-db.js"]
