@@ -48,11 +48,11 @@ pipeline {
                 sh '''
                     docker build \
                       --build-arg NGINX_CONFIG=nginx.aws.conf \
-                      -t hospital-frontend:${BUILD_NUMBER} \
+                      -t hospital-frontend:build-${BUILD_NUMBER}-${GIT_COMMIT} \
                       ./frontend
 
                     docker build \
-                      -t hospital-backend:${BUILD_NUMBER} \
+                      -t hospital-backend:build-${BUILD_NUMBER}-${GIT_COMMIT} \
                       ./backend
                 '''
             }
@@ -68,10 +68,10 @@ pipeline {
                         aws ecr get-login-password --region "$AWS_REGION" | \
                           docker login --username AWS --password-stdin "$REGISTRY"
 
-                        docker tag hospital-frontend:${BUILD_NUMBER} \
+                        docker tag hospital-frontend:build-${BUILD_NUMBER}-${GIT_COMMIT} \
                           "$REGISTRY/$FRONTEND_REPO:$BUILD_NUMBER"
 
-                        docker tag hospital-backend:${BUILD_NUMBER} \
+                        docker tag hospital-backend:build-${BUILD_NUMBER}-${GIT_COMMIT} \
                           "$REGISTRY/$BACKEND_REPO:$BUILD_NUMBER"
 
                         docker push "$REGISTRY/$FRONTEND_REPO:$BUILD_NUMBER"
