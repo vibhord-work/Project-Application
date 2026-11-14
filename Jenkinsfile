@@ -60,13 +60,6 @@ pipeline {
 
         stage('Push Images to ECR') {
             steps {
-                withCredentials([
-                    aws(
-                        credentialsId: 'aws-jenkins-credentials',
-                        accessKeyVariable: 'AWS_ACCESS_KEY_ID',
-                        secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
-                    )
-                ]) {
                     sh '''
                         set -eu
 
@@ -84,20 +77,12 @@ pipeline {
                         docker push "$REGISTRY/$FRONTEND_REPO:$BUILD_NUMBER"
                         docker push "$REGISTRY/$BACKEND_REPO:$BUILD_NUMBER"
                     '''
-                }
             }
         }
 
 
         stage('Deploy to ECS') {
             steps {
-                withCredentials([
-                    aws(
-                        credentialsId: 'aws-jenkins-credentials',
-                        accessKeyVariable: 'AWS_ACCESS_KEY_ID',
-                        secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
-                    )
-                ]) {
                     sh '''
                         set -eu
 
@@ -182,7 +167,6 @@ pipeline {
                           "$BACKEND_SERVICE" \
                           "$BACKEND_REPO"
                     '''
-                }
             }
         }
 
