@@ -27,20 +27,13 @@ const Login = () => {
 
     const navigate = useNavigate()
 
-    useEffect( () => {
-        fetch('/api/newPatientId')
-        .then(res => res.json())
-        .then (data => setData(data))
-        .then(() => setLoaded(true))
-        .catch(err => console.log(err))
-    }, [])
+    useEffect(() => { setLoaded(true) }, [])
 
     const onSumbitHandler = async (event) => {
         event.preventDefault()
 
         if (state === 'Sign Up') {
             const submittedData = {
-                id: data[0].id,
                 firstName: fname,
                 lastName: lname,
                 dateOfBirth: dob,
@@ -58,21 +51,20 @@ const Login = () => {
             try {
                 const response = await fetch('/api/newPatientDetails', {
                     method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
+                    headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(submittedData),
                 });
 
-                const data = await response.json();
-                console.log(data);
+                if (!response.ok) throw new Error('Registration failed');
+
+                const result = await response.json();
+                setPatientId(result.patientId);
+                setToken(true);
+                navigate('/');
             } catch (err) {
                 console.error(err);
+                setInvalid(true);
             }
-
-            setPatientId(submittedData.id)
-            setToken(true)
-            navigate('/')
         }
 
         else{
@@ -104,7 +96,7 @@ const Login = () => {
                             <div>
                                 <div className='w-full mt-3'>
                                     <p>Your id:</p>
-                                    <p className='border border-zinc-300 rounded w-full p-2 mt-1' >{data[0].id}</p>
+                                    <p className='border border-zinc-300 rounded w-full p-2 mt-1' >Automatically assigned after registration</p>
                                 </div>
                                 <div className='w-full mt-3'>
                                     <p>First name:</p>

@@ -60,56 +60,77 @@ app.get('/doctors/:id', (request, result) => {
 
 
 app.get('/newPatientId', (request, result) => {
-    const sql = "SELECT (MAX(patient_id)+1) AS id FROM Patient"
-    db.query(sql, (err, data) => {
-        if(err){
-            return result.json(err);
-        }
-        else{
-            return result.json(data);
-        }
-    })
-})
-
-
-
+    result.json({ message: 'Patient ID is assigned after registration' });
+});
 
 app.post('/newPatientDetails', (request, result) => {
-    const sql = "INSERT INTO Patient VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
-    const sql2 = "INSERT INTO Login VALUES (?, ?)";
-
     const {
-        id,
-        firstName,
-        lastName,
-        dateOfBirth,
-        gender,
-        address,
-        phoneNumber,
-        email,
-        bloodType,
-        emergencyContact,
-        allergies,
-        medicalConditions,
-        password
+        firstName, lastName, dateOfBirth, gender, address,
+        phoneNumber, email, bloodType, emergencyContact,
+        allergies, medicalConditions, password
     } = request.body;
 
-    db.query(sql, [id, firstName, lastName, dateOfBirth, gender, address, phoneNumber, email, bloodType, emergencyContact, allergies, medicalConditions], (err, data) => {
-        if (err) {
-            return result.status(500).json(err);
-        }
-    })
+    if (!firstName || !lastName || !password) {
+        return result.status(400).json({ error: 'Required fields missing' });
+    }
 
-    db.query(sql2, [id, password], (err, data) => {
-        if (err) {
-            return result.status(500).json(err);
-        }
-    })
+    const connection = mysql.createConnection({
+        host: process.env.DB_HOST || '127.0.0.1',
+        port: Number(process.env.DB_PORT || 3306),
+        user: process.env.DB_USER || 'root',
+        password: process.env.DB_PASSWORD,
+        database: process.env.DB_NAME || 'HospitalDBMS'
+    });
 
-    return result.status(201).json("success")
-})
+    const fail = (err) => {
+        console.error('Registration failed:', err.code);
+        connection.rollback(() => {
+            connection.end();
+            if (!result.headersSent) {
+                result.status(500).json({ error: 'Registration failed' });
+            }
+        });
+    };
 
+    connection.beginTransaction((err) => {
+        if (err) return fail(err);
 
+        const sql = `INSERT INTO Patient
+            (first_name, last_name, date_of_birth, gender, address,
+             phone_number, email, blood_type, emergency_contact,
+             allergies, existing_conditions)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+
+        const values = [
+            firstName, lastName, dateOfBirth, gender, address,
+            phoneNumber, email, bloodType, emergencyContact,
+            allergies, medicalConditions
+        ];
+
+        connection.query(sql, values, (err, data) => {
+            if (err) return fail(err);
+
+            const patientId = data.insertId;
+
+            connection.query(
+                'INSERT INTO Login (patient_id, password) VALUES (?, ?)',
+                [patientId, password],
+                (err) => {
+                    if (err) return fail(err);
+
+                    connection.commit((err) => {
+                        if (err) return fail(err);
+                        connection.end();
+                        result.status(201).json({
+                            success: true,
+                            patientId
+                        });
+                    });
+                }
+            );
+        });
+    });
+});
 
 app.get('/loginPatientDetails/:id', (request, result) => {
     const patientId = request.params.id;
