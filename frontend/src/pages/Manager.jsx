@@ -54,7 +54,7 @@ const Manager = () => {
         fetchEquipment();
         fetchStaff();
         fetchWard();
-    }, [doctors, nurses, equipment, staff, wards]);
+    }, []);
 
     // Handling form changes
     const handleChange = (e, category) => {
