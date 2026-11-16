@@ -48,15 +48,25 @@ pipeline {
                 sh '''
                     set -eu
 
-                    echo "Running frontend tests..."
-                    cd frontend
-                    npm ci
-                    npm run test:coverage
+                    docker run --rm \
+                      --user "$(id -u):$(id -g)" \
+                      -e HOME=/tmp \
+                      -v "$PWD:/workspace" \
+                      -w /workspace \
+                      node:22-bookworm \
+                      sh -c '
+                        set -eu
 
-                    echo "Running backend tests..."
-                    cd ../backend
-                    npm ci
-                    npm run test:coverage
+                        echo "Running frontend tests..."
+                        cd frontend
+                        npm ci
+                        npm run test:coverage
+
+                        echo "Running backend tests..."
+                        cd ../backend
+                        npm ci
+                        npm run test:coverage
+                      '
                 '''
             }
         }
