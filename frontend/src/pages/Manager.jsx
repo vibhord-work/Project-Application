@@ -5,13 +5,21 @@ const Manager = () => {
 
     const [isAuthenticated, setIsAuthenticated] = useState(false);
     const [credentials, setCredentials] = useState({ username: '', password: '' });
-    const authenticate = () => {
-        if (credentials.username === 'admin' && credentials.password === 'ImNotAdmin') {
-          setIsAuthenticated(true);
-        } else {
-          alert('Invalid username or password');
+    const authenticate = async () => {
+        try {
+            await axios.post('/api/manager/login', credentials);
+            setCredentials({ username: '', password: '' });
+            setIsAuthenticated(true);
+        } catch (error) {
+            alert(error.response?.data?.error || 'Login failed');
         }
     };
+
+    useEffect(() => {
+        axios.get('/api/manager/session')
+            .then(() => setIsAuthenticated(true))
+            .catch(() => setIsAuthenticated(false));
+    }, []);
 
     const [doctors, setDoctors] = useState([]);
     const [nurses, setNurses] = useState([]);
@@ -68,6 +76,7 @@ const Manager = () => {
     const addDoctor = async (e) => {
         e.preventDefault();
         await axios.post('/api/addDoctor', formData.doctor);
+        window.location.reload();
         setFormData({
             ...formData,
             doctor: { firstName: '', lastName: '', specialization: 'general-physician', phoneNumber: '', email: '', availableDays: 'Monday', availableFrom: '', availableTo: '', yearsOfExperience: '', salary: '' }
@@ -77,12 +86,14 @@ const Manager = () => {
     // Function to delete a doctor
     const deleteDoctor = async (doctorId) => {
         await axios.delete(`/api/deleteDoctor/${doctorId}`);
+        window.location.reload();
     };
 
     // Function to add a nurse
     const addNurse = async (e) => {
         e.preventDefault();
         await axios.post('/api/addNurse', formData.nurse);
+        window.location.reload();
         setFormData({
             ...formData,
             nurse: { firstName: '', lastName: '', shift: 'Morning', phoneNumber: '', email: '', wardId: '' }
@@ -92,12 +103,14 @@ const Manager = () => {
     // Function to delete a nurse
     const deleteNurse = async (nurseId) => {
         await axios.delete(`/api/deleteNurse/${nurseId}`);
+        window.location.reload();
     };
 
     // Function to add equipment
     const addEquipment = async (e) => {
         e.preventDefault();
         await axios.post('/api/addEquipment', formData.equipment);
+        window.location.reload();
         setFormData({
             ...formData,
             equipment: { name: '', status: 'Available', purchaseDate: '', warrantyTill: '', lastMaintenance: '' }
@@ -107,12 +120,14 @@ const Manager = () => {
     // Function to delete equipment
     const deleteEquipment = async (equipmentId) => {
         await axios.delete(`/api/deleteEquipment/${equipmentId}`);
+        window.location.reload();
     };
 
     // Function to add staff
     const addStaff = async (e) => {
         e.preventDefault();
         await axios.post('/api/addStaff', formData.staff);
+        window.location.reload();
         setFormData({
             ...formData,
             staff: { firstName: '', lastName: '', jobRole: '', phoneNumber: '', email: '', salary: '' }
@@ -122,12 +137,14 @@ const Manager = () => {
     // Function to delete staff
     const deleteStaff = async (staffId) => {
         await axios.delete(`/api/deleteStaff/${staffId}`);
+        window.location.reload();
     };
 
     // Function to add a ward
     const addWard = async (e) => {
         e.preventDefault();
         await axios.post('/api/addWard', formData.ward);
+        window.location.reload();
         setFormData({
             ...formData,
             ward: { type: 'Public', totalBeds: '', availableBeds: '', floorNumber: '' }
@@ -137,6 +154,7 @@ const Manager = () => {
     // Function to delete a ward
     const deleteWard = async (wardId) => {
         await axios.delete(`/api/deleteWard/${wardId}`);
+        window.location.reload();
     };
 
     if (!isAuthenticated) {
