@@ -112,7 +112,7 @@ app.get('/health', (req, res) => {
     res.status(200).json({ status: 'healthy' })
 })
 
-const db = mysql.createPool({
+let db = mysql.createPool({
     connectionLimit: 10,
     waitForConnections: true,
     queueLimit: 0,
@@ -594,3 +594,8 @@ if (require.main === module) {
 }
 
 module.exports = app
+
+// Allow automated tests to replace the database pool.
+module.exports.setDatabase = (database) => {
+    db = database;
+}
