@@ -81,6 +81,9 @@ pipeline {
                             "${scannerHome}/bin/sonar-scanner" \
                               -Dsonar.projectKey=vibhord-work_HospitalDBMS-DevOps \
                               -Dsonar.organization=vibhord-work \
+                              -Dsonar.pullrequest.key=16 \
+                              -Dsonar.pullrequest.branch=test/improve-code-coverage \
+                              -Dsonar.pullrequest.base=main \
                               -Dsonar.sources=backend,frontend/src \
                               -Dsonar.host.url=https://sonarcloud.io \
                               -Dsonar.javascript.lcov.reportPaths=frontend/coverage/lcov.info,backend/coverage/lcov.info \
@@ -94,6 +97,12 @@ pipeline {
 
 
         stage('Build Docker Images') {
+            when {
+                expression {
+                    env.GIT_BRANCH == 'origin/main' ||
+                    env.GIT_BRANCH == 'main'
+                }
+            }
             steps {
                 sh '''
                     docker build \
@@ -109,6 +118,12 @@ pipeline {
         }
 
         stage('Push Images to ECR') {
+            when {
+                expression {
+                    env.GIT_BRANCH == 'origin/main' ||
+                    env.GIT_BRANCH == 'main'
+                }
+            }
             steps {
                 sh '''
                     set -eu
@@ -131,6 +146,12 @@ pipeline {
         }
 
         stage('Deploy to ECS') {
+            when {
+                expression {
+                    env.GIT_BRANCH == 'origin/main' ||
+                    env.GIT_BRANCH == 'main'
+                }
+            }
             steps {
                 sh '''
                     set -eu
