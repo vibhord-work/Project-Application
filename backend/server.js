@@ -1,4 +1,5 @@
 const express = require('express')
+const crypto = require('node:crypto')
 const mysql = require('mysql')
 const cors = require('cors')
 
@@ -16,11 +17,105 @@ app.use((req, res, next) => {
     next()
 })
 
+const MANAGER_USERNAME = process.env.MANAGER_USERNAME || 'admin';
+const MANAGER_PASSWORD_HASH = process.env.MANAGER_PASSWORD_HASH;
+const MANAGER_SESSION_SECRET = process.env.MANAGER_SESSION_SECRET;
+const SESSION_DURATION = 8 * 60 * 60 * 1000;
+
+function sign(value) {
+    return crypto.createHmac('sha256', MANAGER_SESSION_SECRET)
+        .update(value).digest('hex');
+}
+
+function secureEqual(a, b) {
+    const x = Buffer.from(String(a));
+    const y = Buffer.from(String(b));
+    return x.length === y.length && crypto.timingSafeEqual(x, y);
+}
+
+function managerAuth(request, response, next) {
+    if (!MANAGER_SESSION_SECRET || !MANAGER_PASSWORD_HASH) {
+        return response.status(503).json({ error: 'Manager authentication is not configured' });
+    }
+
+    const cookies = Object.fromEntries(
+        (request.headers.cookie || '').split(';')
+            .map(item => item.trim().split(/=(.*)/s).slice(0, 2))
+            .filter(item => item.length === 2)
+    );
+
+    const token = cookies.manager_session || '';
+    const separator = token.lastIndexOf('.');
+    if (separator < 0) {
+        return response.status(401).json({ error: 'Authentication required' });
+    }
+
+    const payload = token.slice(0, separator);
+    const signature = token.slice(separator + 1);
+    const expiry = Number(payload);
+
+    if (!Number.isSafeInteger(expiry) || expiry <= Date.now() ||
+        !secureEqual(signature, sign(payload))) {
+        return response.status(401).json({ error: 'Invalid or expired session' });
+    }
+
+    next();
+}
+
+app.post('/manager/login', (request, response) => {
+    if (!MANAGER_PASSWORD_HASH || !MANAGER_SESSION_SECRET) {
+        return response.status(503).json({ error: 'Manager authentication is not configured' });
+    }
+
+    const { username, password } = request.body || {};
+    if (typeof username !== 'string' || typeof password !== 'string') {
+        return response.status(400).json({ error: 'Invalid credentials' });
+    }
+
+    const [salt, expected] = MANAGER_PASSWORD_HASH.split(':');
+    if (!salt || !expected || !/^[a-f0-9]{32}$/.test(salt) ||
+        !/^[a-f0-9]{128}$/.test(expected)) {
+        return response.status(503).json({ error: 'Invalid authentication configuration' });
+    }
+
+    const actual = crypto.scryptSync(password, Buffer.from(salt, 'hex'), 64).toString('hex');
+
+    if (!secureEqual(username, MANAGER_USERNAME) || !secureEqual(actual, expected)) {
+        return response.status(401).json({ error: 'Invalid credentials' });
+    }
+
+    const expiry = String(Date.now() + SESSION_DURATION);
+    const token = `${expiry}.${sign(expiry)}`;
+
+    response.cookie('manager_session', token, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'strict',
+        maxAge: SESSION_DURATION,
+        path: '/'
+    });
+
+    response.json({ authenticated: true });
+});
+
+app.get('/manager/session', managerAuth, (request, response) => {
+    response.json({ authenticated: true });
+});
+
+app.post('/manager/logout', (request, response) => {
+    response.clearCookie('manager_session', { path: '/' });
+    response.json({ authenticated: false });
+});
+
+
 app.get('/health', (req, res) => {
     res.status(200).json({ status: 'healthy' })
 })
 
-const db = mysql.createConnection({
+const db = mysql.createPool({
+    connectionLimit: 10,
+    waitForConnections: true,
+    queueLimit: 0,
     host: process.env.DB_HOST || "127.0.0.1",
     port: Number(process.env.DB_PORT || 3306),
     user: process.env.DB_USER || "root",
@@ -34,7 +129,10 @@ app.get('/doctors', (request, result) => {
     const sql = "SELECT * FROM Doctor"
     db.query(sql, (err, data) => {
         if(err){
-            return result.json(err);
+            console.error('Doctors database query failed:', err.code);
+            return result.status(503).json({
+                error: 'Database temporarily unavailable'
+            });
         }
         else{
             return result.json(data);
@@ -49,7 +147,10 @@ app.get('/doctors/:id', (request, result) => {
     const sql = "SELECT * FROM Doctor WHERE doctor_id = ?"
     db.query(sql, [doctorId], (err, data) => {
         if(err){
-            return result.json(err);
+            console.error('Doctors database query failed:', err.code);
+            return result.status(503).json({
+                error: 'Database temporarily unavailable'
+            });
         }
         else{
             return result.json(data);
@@ -307,7 +408,7 @@ app.get('/wards', (request, result) => {
 })
 
 
-app.delete('/deleteDoctor/:id', (request, result) => {
+app.delete('/deleteDoctor/:id', managerAuth, (request, result) => {
     const doctorId = request.params.id;
     const sql = "DELETE FROM Doctor WHERE doctor_id = ?"
     db.query(sql, [doctorId], (err, data) => {
@@ -322,7 +423,7 @@ app.delete('/deleteDoctor/:id', (request, result) => {
 
 
 
-app.delete('/deleteNurse/:id', (request, result) => {
+app.delete('/deleteNurse/:id', managerAuth, (request, result) => {
     const nurseId = request.params.id;
     const sql = "DELETE FROM Nurse WHERE nurse_id = ?"
     db.query(sql, [nurseId], (err, data) => {
@@ -336,7 +437,7 @@ app.delete('/deleteNurse/:id', (request, result) => {
 })
 
 
-app.delete('/deleteEquipment/:id', (request, result) => {
+app.delete('/deleteEquipment/:id', managerAuth, (request, result) => {
     const equipmentId = request.params.id;
     const sql = "DELETE FROM Equipment WHERE equipment_id = ?"
     db.query(sql, [equipmentId], (err, data) => {
@@ -350,7 +451,7 @@ app.delete('/deleteEquipment/:id', (request, result) => {
 })
 
 
-app.delete('/deleteStaff/:id', (request, result) => {
+app.delete('/deleteStaff/:id', managerAuth, (request, result) => {
     const staffId = request.params.id;
     const sql = "DELETE FROM Staff WHERE staff_id = ?"
     db.query(sql, [staffId], (err, data) => {
@@ -363,7 +464,7 @@ app.delete('/deleteStaff/:id', (request, result) => {
     })
 })
 
-app.delete('/deleteWard/:id', (request, result) => {
+app.delete('/deleteWard/:id', managerAuth, (request, result) => {
     const wardId = request.params.id;
     const sql = "DELETE FROM Ward WHERE ward_id = ?"
     db.query(sql, [wardId], (err, data) => {
@@ -377,7 +478,7 @@ app.delete('/deleteWard/:id', (request, result) => {
 })
 
 
-app.post('/addDoctor', (request, result) => {
+app.post('/addDoctor', managerAuth, (request, result) => {
 
     const sql = "INSERT INTO Doctor VALUES (default, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);";
     const {
@@ -406,7 +507,7 @@ app.post('/addDoctor', (request, result) => {
 
 
 
-app.post('/addNurse', (request, result) => {
+app.post('/addNurse', managerAuth, (request, result) => {
 
     const sql = "INSERT INTO Nurse VALUES (default, ?, ?, ?, ?, ?, ?);";
     const {
@@ -430,7 +531,7 @@ app.post('/addNurse', (request, result) => {
 
 
 
-app.post('/addEquipment', (request, result) => {
+app.post('/addEquipment', managerAuth, (request, result) => {
 
     const sql = "INSERT INTO Equipment VALUES (default, ?, ?, ?, ?, ?);";
     const {
@@ -453,7 +554,7 @@ app.post('/addEquipment', (request, result) => {
 
 
 
-app.post('/addStaff', (request, result) => {
+app.post('/addStaff', managerAuth, (request, result) => {
 
     const sql = "INSERT INTO Staff VALUES (default, ?, ?, ?, ?, ?, ?);";
     const {firstName, lastName, jobRole, phoneNumber, email, salary} = request.body;
@@ -470,7 +571,7 @@ app.post('/addStaff', (request, result) => {
 
 
 
-app.post('/addWard', (request, result) => {
+app.post('/addWard', managerAuth, (request, result) => {
 
     const sql = "INSERT INTO Ward VALUES (default, ?, ?, ?, ?);";
     const {type, totalBeds, availableBeds, floorNumber} = request.body;
