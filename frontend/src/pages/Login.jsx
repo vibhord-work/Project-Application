@@ -67,19 +67,35 @@ const Login = () => {
             }
         }
 
-        else{
-            fetch(`/api/loginPatientDetails/${patientId}`)
-            .then(res => res.json())
-            .then (data => setActualPass(data[0].password))
-            .catch((err) => setInvalid(true))
+        else {
+            const id = Number(patientId);
 
-            if(actualPass === password){
-                setInvalid(false)
-                setToken(true)
-                navigate('/')
+            if (!Number.isSafeInteger(id) || id <= 0) {
+                setInvalid(true);
+                return;
             }
-            else{
-                setInvalid(true)
+
+            try {
+                const response = await fetch(
+                    `/api/loginPatientDetails/${encodeURIComponent(String(id))}`
+                );
+
+                if (!response.ok) {
+                    throw new Error('Login request failed');
+                }
+
+                const data = await response.json();
+
+                if (data.length > 0 && data[0].password === password) {
+                    setInvalid(false);
+                    setToken(true);
+                    navigate('/');
+                } else {
+                    setInvalid(true);
+                }
+            } catch (err) {
+                console.error(err);
+                setInvalid(true);
             }
         }
     }
