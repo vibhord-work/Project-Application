@@ -82,8 +82,8 @@ pipeline {
                               -Dsonar.projectKey=vibhord-work_HospitalDBMS-DevOps \
                               -Dsonar.organization=vibhord-work \
                               -Dsonar.sources=backend,frontend/src \
-                              -Dsonar.tests=backend/tests,frontend/src \
-                              -Dsonar.test.inclusions=backend/tests/**/*.js,frontend/src/**/*.test.jsx,frontend/src/test/**/*.js \
+                              -Dsonar.tests=backend/tests \
+                              -Dsonar.test.inclusions=backend/tests/**/*.js \
                               -Dsonar.exclusions=backend/tests/**,backend/**/*.test.js,frontend/src/**/*.test.jsx,frontend/src/test/** \
                               -Dsonar.host.url=https://sonarcloud.io \
                               -Dsonar.javascript.lcov.reportPaths=frontend/coverage/lcov.info,backend/coverage/lcov.info \
