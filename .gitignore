@@ -25,3 +25,5 @@ database_files/
 
 # Demonstration media
 *.mp4
+
+**/coverage/
