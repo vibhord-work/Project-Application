@@ -587,6 +587,10 @@ app.post('/addWard', managerAuth, (request, result) => {
 })
 
 
-app.listen(8081, () => {
-    console.log("listening")
-})
+if (require.main === module) {
+    app.listen(8081, () => {
+        console.log("listening")
+    })
+}
+
+module.exports = app

@@ -43,6 +43,24 @@ pipeline {
             }
         }
 
+        stage('Automated Tests') {
+            steps {
+                sh '''
+                    set -eu
+
+                    echo "Running frontend tests..."
+                    cd frontend
+                    npm ci
+                    npm run test:coverage
+
+                    echo "Running backend tests..."
+                    cd ../backend
+                    npm ci
+                    npm run test:coverage
+                '''
+            }
+        }
+
         stage('SonarCloud Analysis') {
             steps {
                 script {
@@ -55,6 +73,7 @@ pipeline {
                               -Dsonar.organization=vibhord-work \
                               -Dsonar.sources=backend,frontend/src \
                               -Dsonar.host.url=https://sonarcloud.io \
+                              -Dsonar.javascript.lcov.reportPaths=frontend/coverage/lcov.info,backend/coverage/lcov.info \
                               -Dsonar.qualitygate.wait=true \
                               -Dsonar.qualitygate.timeout=300
                         """
