@@ -101,6 +101,38 @@ pipeline {
             }
         }
 
+        stage('Trivy Image CVE Scan') {
+            steps {
+                sh '''
+                    set -eu
+                    mkdir -p reports
+                    echo "Generating complete Trivy JSON and table reports..."
+                    trivy image --scanners vuln --format json --output reports/trivy-frontend.json --exit-code 0 hospital-frontend:build-${BUILD_NUMBER}-${GIT_COMMIT}
+                    trivy image --scanners vuln --format table --output reports/trivy-frontend.txt --exit-code 0 hospital-frontend:build-${BUILD_NUMBER}-${GIT_COMMIT}
+                    trivy image --scanners vuln --format json --output reports/trivy-backend.json --exit-code 0 hospital-backend:build-${BUILD_NUMBER}-${GIT_COMMIT}
+                    trivy image --scanners vuln --format table --output reports/trivy-backend.txt --exit-code 0 hospital-backend:build-${BUILD_NUMBER}-${GIT_COMMIT}
+
+                    echo "Enforcing HIGH/CRITICAL vulnerability gate..."
+                    set +e
+                    trivy image --scanners vuln --severity HIGH,CRITICAL --exit-code 1 hospital-frontend:build-${BUILD_NUMBER}-${GIT_COMMIT}
+                    FRONTEND_SCAN_STATUS=$?
+                    trivy image --scanners vuln --severity HIGH,CRITICAL --exit-code 1 hospital-backend:build-${BUILD_NUMBER}-${GIT_COMMIT}
+                    BACKEND_SCAN_STATUS=$?
+                    set -e
+                    if [ "$FRONTEND_SCAN_STATUS" -ne 0 ] || [ "$BACKEND_SCAN_STATUS" -ne 0 ]; then
+                        echo "Trivy gate failed. Full reports are archived by the pipeline post action."
+                        exit 1
+                    fi
+                    echo "Trivy vulnerability gate passed."
+                '''
+            }
+            post {
+                always {
+                    archiveArtifacts artifacts: 'reports/trivy-*.json,reports/trivy-*.txt', fingerprint: true, allowEmptyArchive: true
+                }
+            }
+        }
+
         stage('Push Images to ECR') {
             steps {
                 sh '''
@@ -208,6 +240,10 @@ pipeline {
     }
 
     post {
+        always {
+            archiveArtifacts artifacts: 'reports/trivy-*.json,reports/trivy-*.txt', fingerprint: true, allowEmptyArchive: true
+        }
+
         success {
             echo 'Jenkins pipeline completed successfully.'
         }
