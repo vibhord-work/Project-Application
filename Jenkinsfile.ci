@@ -47,18 +47,19 @@ pipeline {
             steps {
                 script {
                     def scannerHome = tool 'SonarScanner'
+                    def sonarBranch = (env.CHANGE_BRANCH ?: env.BRANCH_NAME ?: env.GIT_BRANCH ?: 'main')
+                        .replaceFirst('^origin/', '')
+                        .replaceFirst('^refs/heads/', '')
+                    def sonarBranchArg = sonarBranch == 'main' ? '' : "-Dsonar.branch.name=${sonarBranch}"
+                    def qualityGateWait = sonarBranch == 'main' ? 'true' : 'false'
+
 
                     withSonarQubeEnv('SonarQube-Cloud') {
+                        // Keep the scanner invocation on one shell line to avoid
+                        // accidental command splitting in Jenkins/Groovy.
                         sh """
-                            "${scannerHome}/bin/sonar-scanner" \
-                              -Dsonar.projectKey=vibhord-work_HospitalDBMS-DevOps \
-                              -Dsonar.organization=vibhord-work \
-                              -Dsonar.sources=backend,frontend/src \
-                              -Dsonar.tests=backend/tests \
-                              -Dsonar.test.inclusions=backend/tests/**/*.js \
-                              -Dsonar.exclusions=backend/tests/**,backend/**/*.test.js,frontend/src/**/*.test.jsx,frontend/src/test/** \
-                              -Dsonar.host.url=https://sonarcloud.io \
-                              -Dsonar.qualitygate.wait=false
+                            set -eu
+                            "${scannerHome}/bin/sonar-scanner" -Dsonar.projectKey=vibhord-work_HospitalDBMS-DevOps -Dsonar.organization=vibhord-work ${sonarBranchArg} -Dsonar.sources=backend,frontend/src -Dsonar.tests=backend/tests -Dsonar.test.inclusions=backend/tests/**/*.js -Dsonar.exclusions=backend/tests/**,backend/**/*.test.js,frontend/src/**/*.test.jsx,frontend/src/test/** -Dsonar.host.url=https://sonarcloud.io -Dsonar.qualitygate.wait=${qualityGateWait} -Dsonar.qualitygate.timeout=300
                         """
                     }
                 }
@@ -66,86 +67,21 @@ pipeline {
         }
 
 
-        stage('SonarCloud SAST Gate') {
+        stage('SonarCloud Security Report') {
             steps {
-                withCredentials([string(credentialsId: 'sonarcloud-token', variable: 'SONAR_TOKEN')]) {
-                    sh '''
-                        set -eu
-
-                        REPORT=".scannerwork/report-task.txt"
-                        test -f "$REPORT" || {
-                            echo "FAIL: SonarCloud task metadata missing."
-                            exit 1
-                        }
-
-                        TASK_URL=$(sed -n 's/^ceTaskUrl=//p' "$REPORT")
-                        test -n "$TASK_URL"
-
-                        echo "Waiting for current SonarCloud analysis..."
-
-                        STATUS="PENDING"
-
-                        for i in $(seq 1 60); do
-                            RESPONSE=$(curl -fsS -u "$SONAR_TOKEN:" "$TASK_URL")
-                            STATUS=$(echo "$RESPONSE" | jq -r '.task.status')
-
-                            case "$STATUS" in
-                                SUCCESS) break ;;
-                                FAILED|CANCELED)
-                                    echo "FAIL: SonarCloud analysis $STATUS"
-                                    exit 1
-                                    ;;
-                            esac
-
-                            sleep 5
-                        done
-
-                        test "$STATUS" = "SUCCESS" || {
-                            echo "FAIL: SonarCloud analysis timed out."
-                            exit 1
-                        }
-
-                        ANALYSIS_ID=$(echo "$RESPONSE" | jq -r '.task.analysisId')
-                        test -n "$ANALYSIS_ID"
-                        test "$ANALYSIS_ID" != "null"
-
-                        PROJECT="vibhord-work_HospitalDBMS-DevOps"
-
-                        HISTORY=$(curl -fsS -u "$SONAR_TOKEN:" \
-                          --get "https://sonarcloud.io/api/project_analyses/search" \
-                          --data-urlencode "project=$PROJECT" \
-                          --data-urlencode "ps=1")
-
-                        LATEST_ID=$(echo "$HISTORY" | jq -r '.analyses[0].key')
-
-                        test "$LATEST_ID" = "$ANALYSIS_ID" || {
-                            echo "FAIL: Current analysis does not match latest project analysis."
-                            exit 1
-                        }
-
-                        echo "Checking unresolved security vulnerabilities in new code..."
-
-                        ISSUES=$(curl -fsS -u "$SONAR_TOKEN:" \
-                          --get "https://sonarcloud.io/api/issues/search" \
-                          --data-urlencode "componentKeys=$PROJECT" \
-                          --data-urlencode "branch=main" \
-                          --data-urlencode "types=VULNERABILITY" \
-                          --data-urlencode "resolved=false" \
-                          --data-urlencode "inNewCodePeriod=true" \
-                          --data-urlencode "ps=1")
-
-                        COUNT=$(echo "$ISSUES" | jq -er '.total')
-
-                        echo "New unresolved security vulnerabilities: $COUNT"
-
-                        if [ "$COUNT" -gt 0 ]; then
-                            echo "FAIL: SonarCloud SAST security gate rejected the build."
-                            echo "$ISSUES" | jq -r '.issues[] | "- " + (.severity // "UNKNOWN") + ": " + .message'
-                            exit 1
-                        fi
-
-                        echo "PASS: SonarCloud SAST security gate."
-                    '''
+                script {
+                    def reportBranch = (env.CHANGE_BRANCH ?: env.BRANCH_NAME ?: env.GIT_BRANCH ?: 'main')
+                        .replaceFirst('^origin/', '')
+                        .replaceFirst('^refs/heads/', '')
+                    def reportUrl = reportBranch == 'main'
+                        ? 'https://sonarcloud.io/dashboard?id=vibhord-work_HospitalDBMS-DevOps'
+                        : "https://sonarcloud.io/dashboard?id=vibhord-work_HospitalDBMS-DevOps&branch=${java.net.URLEncoder.encode(reportBranch, 'UTF-8')}"
+                    echo "SonarCloud SAST analysis completed. Security report: ${reportUrl}"
+                    if (reportBranch == 'main') {
+                        echo 'The native SonarCloud Quality Gate is enforced during main-branch analysis.'
+                    } else {
+                        echo 'Feature-branch report is available in SonarCloud; native branch Quality Gate is unavailable on the current organization plan.'
+                    }
                 }
             }
         }
@@ -169,23 +105,31 @@ pipeline {
             steps {
                 sh '''
                     set -eu
+                    mkdir -p reports
+                    echo "Generating complete Trivy JSON and table reports..."
+                    trivy image --scanners vuln --format json --output reports/trivy-frontend.json --exit-code 0 hospital-frontend:build-${BUILD_NUMBER}-${GIT_COMMIT}
+                    trivy image --scanners vuln --format table --output reports/trivy-frontend.txt --exit-code 0 hospital-frontend:build-${BUILD_NUMBER}-${GIT_COMMIT}
+                    trivy image --scanners vuln --format json --output reports/trivy-backend.json --exit-code 0 hospital-backend:build-${BUILD_NUMBER}-${GIT_COMMIT}
+                    trivy image --scanners vuln --format table --output reports/trivy-backend.txt --exit-code 0 hospital-backend:build-${BUILD_NUMBER}-${GIT_COMMIT}
 
-                    docker run --rm \
-                      -v /var/run/docker.sock:/var/run/docker.sock \
-                      aquasec/trivy:0.68.2 image \
-                      --severity HIGH,CRITICAL \
-                      --exit-code 1 \
-                      --scanners vuln \
-                      "hospital-frontend:build-${BUILD_NUMBER}-${GIT_COMMIT}"
-
-                    docker run --rm \
-                      -v /var/run/docker.sock:/var/run/docker.sock \
-                      aquasec/trivy:0.68.2 image \
-                      --severity HIGH,CRITICAL \
-                      --exit-code 1 \
-                      --scanners vuln \
-                      "hospital-backend:build-${BUILD_NUMBER}-${GIT_COMMIT}"
+                    echo "Enforcing HIGH/CRITICAL vulnerability gate..."
+                    set +e
+                    trivy image --scanners vuln --severity HIGH,CRITICAL --exit-code 1 hospital-frontend:build-${BUILD_NUMBER}-${GIT_COMMIT}
+                    FRONTEND_SCAN_STATUS=$?
+                    trivy image --scanners vuln --severity HIGH,CRITICAL --exit-code 1 hospital-backend:build-${BUILD_NUMBER}-${GIT_COMMIT}
+                    BACKEND_SCAN_STATUS=$?
+                    set -e
+                    if [ "$FRONTEND_SCAN_STATUS" -ne 0 ] || [ "$BACKEND_SCAN_STATUS" -ne 0 ]; then
+                        echo "Trivy gate failed. Full reports are archived by the pipeline post action."
+                        exit 1
+                    fi
+                    echo "Trivy vulnerability gate passed."
                 '''
+            }
+            post {
+                always {
+                    archiveArtifacts artifacts: 'reports/trivy-*.json,reports/trivy-*.txt', fingerprint: true, allowEmptyArchive: true
+                }
             }
         }
 
@@ -280,7 +224,8 @@ pipeline {
                     }
 
                     build job: 'pipeline-cd',
-                        wait: false,
+                        wait: true,
+                        propagate: true,
                         parameters: [
                             string(name: 'FRONTEND_IMAGE', value: frontendImage),
                             string(name: 'BACKEND_IMAGE', value: backendImage),
@@ -295,6 +240,10 @@ pipeline {
     }
 
     post {
+        always {
+            archiveArtifacts artifacts: 'reports/trivy-*.json,reports/trivy-*.txt', fingerprint: true, allowEmptyArchive: true
+        }
+
         success {
             echo 'Jenkins pipeline completed successfully.'
         }

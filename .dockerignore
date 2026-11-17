@@ -1,0 +1,24 @@
+# Git and editor files
+.git
+.gitignore
+.vscode
+.idea
+
+# Node dependencies and build output
+**/node_modules
+**/dist
+**/coverage
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+
+# Environment files and secrets
+.env
+.env.*
+!.env.example
+**/*.pem
+**/*.key
+
+# Local data and logs
+*.log
+.DS_Store

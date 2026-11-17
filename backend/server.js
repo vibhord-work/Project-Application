@@ -1,10 +1,8 @@
 const express = require('express')
 const crypto = require('node:crypto')
 const mysql = require('mysql')
-const cors = require('cors')
 
 const app = express()
-app.use(cors())
 app.use(express.json())
 
 // Accept /api/* requests from the AWS Application Load Balancer
