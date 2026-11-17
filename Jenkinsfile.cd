@@ -1,0 +1,208 @@
+pipeline {
+    agent any
+
+    options {
+        timestamps()
+        disableConcurrentBuilds()
+    }
+
+    parameters {
+        string(
+            name: 'FRONTEND_IMAGE',
+            defaultValue: '',
+            description: 'Approved frontend ECR image URI with SHA-256 digest'
+        )
+        string(
+            name: 'BACKEND_IMAGE',
+            defaultValue: '',
+            description: 'Approved backend ECR image URI with SHA-256 digest'
+        )
+        string(
+            name: 'CI_JOB_NAME',
+            defaultValue: '',
+            description: 'Authorized upstream CI job'
+        )
+        string(
+            name: 'CI_BUILD_NUMBER',
+            defaultValue: '',
+            description: 'Successful upstream CI build number'
+        )
+        string(
+            name: 'CI_COMMIT',
+            defaultValue: '',
+            description: 'Source Git commit SHA'
+        )
+    }
+
+    environment {
+        AWS_REGION     = 'us-east-1'
+        AWS_ACCOUNT_ID = '460249938865'
+        ECS_CLUSTER    = 'project-poc-ecs-cluster'
+
+        FRONTEND_REPO  = 'project-poc-frontend'
+        BACKEND_REPO   = 'project-poc-backend'
+
+        FRONTEND_SERVICE = 'project-poc-frontend-service'
+        BACKEND_SERVICE  = 'project-poc-backend-service'
+    }
+
+    stages {
+        stage('Checkout') {
+            steps {
+                checkout scm
+            }
+        }
+
+        stage('Deploy to ECS') {
+            steps {
+                sh '''
+                    set -eu
+
+                    REGISTRY="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+
+                    test "$CI_JOB_NAME" = "pipeline-ci" || {
+                        echo "ERROR: Deployment must originate from pipeline-ci."
+                        exit 1
+                    }
+
+                    case "$CI_BUILD_NUMBER" in
+                        ''|*[!0-9]*)
+                            echo "ERROR: Invalid CI build number."
+                            exit 1
+                            ;;
+                    esac
+
+                    printf '%s' "$CI_COMMIT" |
+                      grep -Eq '^[a-f0-9]{40}$' || {
+                        echo "ERROR: Invalid CI commit SHA."
+                        exit 1
+                    }
+
+                    validate_image() {
+                        IMAGE="$1"
+                        REPOSITORY="$2"
+
+                        printf '%s\n' "$IMAGE" |
+                          grep -Eq "^${REGISTRY}/${REPOSITORY}@sha256:[a-f0-9]{64}$" || {
+                            echo "ERROR: Invalid or unapproved image reference: $REPOSITORY"
+                            exit 1
+                        }
+                    }
+
+                    validate_image "$FRONTEND_IMAGE" "$FRONTEND_REPO"
+                    validate_image "$BACKEND_IMAGE" "$BACKEND_REPO"
+
+                    verify_ecr_image() {
+                        IMAGE="$1"
+                        REPOSITORY="$2"
+                        DIGEST="${IMAGE##*@}"
+
+                        ACTUAL=$(aws ecr describe-images \
+                          --repository-name "$REPOSITORY" \
+                          --image-ids imageDigest="$DIGEST" \
+                          --region "$AWS_REGION" \
+                          --query 'imageDetails[0].imageDigest' \
+                          --output text)
+
+                        test "$ACTUAL" = "$DIGEST" || {
+                            echo "ERROR: Image digest not found in ECR: $REPOSITORY"
+                            exit 1
+                        }
+
+                        echo "Verified ECR image: $REPOSITORY@$DIGEST"
+                    }
+
+                    verify_ecr_image "$FRONTEND_IMAGE" "$FRONTEND_REPO"
+                    verify_ecr_image "$BACKEND_IMAGE" "$BACKEND_REPO"
+
+                    deploy_service() {
+                        FAMILY="$1"
+                        CONTAINER="$2"
+                        SERVICE="$3"
+                        IMAGE="$4"
+
+                        echo "Deploying $SERVICE with image $IMAGE"
+
+                        aws ecs describe-task-definition \
+                          --task-definition "$FAMILY" \
+                          --region "$AWS_REGION" \
+                          --query taskDefinition \
+                          --output json > current-task.json
+
+                        # Verify the expected container exists
+                        jq -e --arg CONTAINER "$CONTAINER" \
+                          '.containerDefinitions | any(.name == $CONTAINER)' \
+                          current-task.json > /dev/null
+
+                        jq --arg IMAGE "$IMAGE" \
+                           --arg CONTAINER "$CONTAINER" '
+                          .containerDefinitions |= map(
+                            if .name == $CONTAINER
+                            then .image = $IMAGE
+                            else .
+                            end
+                          )
+                          | del(
+                              .taskDefinitionArn,
+                              .revision,
+                              .status,
+                              .requiresAttributes,
+                              .compatibilities,
+                              .registeredAt,
+                              .registeredBy,
+                              .deregisteredAt
+                            )
+                        ' current-task.json > new-task.json
+
+                        NEW_TASK_ARN=$(aws ecs register-task-definition \
+                          --cli-input-json file://new-task.json \
+                          --region "$AWS_REGION" \
+                          --query 'taskDefinition.taskDefinitionArn' \
+                          --output text)
+
+                        echo "Registered task definition: $NEW_TASK_ARN"
+
+                        aws ecs update-service \
+                          --cluster "$ECS_CLUSTER" \
+                          --service "$SERVICE" \
+                          --task-definition "$NEW_TASK_ARN" \
+                          --region "$AWS_REGION" \
+                          --query 'service.{Name:serviceName,TaskDefinition:taskDefinition}' \
+                          --output table
+
+                        echo "Waiting for $SERVICE to become stable..."
+
+                        aws ecs wait services-stable \
+                          --cluster "$ECS_CLUSTER" \
+                          --services "$SERVICE" \
+                          --region "$AWS_REGION"
+
+                        echo "$SERVICE deployment completed."
+                    }
+
+                    deploy_service \
+                      "project-poc-frontend" \
+                      "frontend" \
+                      "$FRONTEND_SERVICE" \
+                      "$FRONTEND_IMAGE"
+
+                    deploy_service \
+                      "project-poc-backend" \
+                      "backend" \
+                      "$BACKEND_SERVICE" \
+                      "$BACKEND_IMAGE"
+                '''
+            }
+        }
+    }
+
+    post {
+        success {
+            echo 'Jenkins pipeline completed successfully.'
+        }
+
+        failure {
+            echo 'Jenkins CD pipeline failed. Check stage logs.'
+        }
+    }
+}
