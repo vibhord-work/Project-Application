@@ -67,12 +67,22 @@ pipeline {
         }
 
 
-        stage('SonarCloud SAST Gate') {
-            when {
-                branch 'main'
-            }
+        stage('SonarCloud Security Report') {
             steps {
-                echo 'Main branch: SonarCloud native Quality Gate was enforced during analysis.'
+                script {
+                    def reportBranch = (env.CHANGE_BRANCH ?: env.BRANCH_NAME ?: env.GIT_BRANCH ?: 'main')
+                        .replaceFirst('^origin/', '')
+                        .replaceFirst('^refs/heads/', '')
+                    def reportUrl = reportBranch == 'main'
+                        ? 'https://sonarcloud.io/dashboard?id=vibhord-work_HospitalDBMS-DevOps'
+                        : "https://sonarcloud.io/dashboard?id=vibhord-work_HospitalDBMS-DevOps&branch=${java.net.URLEncoder.encode(reportBranch, 'UTF-8')}"
+                    echo "SonarCloud SAST analysis completed. Security report: ${reportUrl}"
+                    if (reportBranch == 'main') {
+                        echo 'The native SonarCloud Quality Gate is enforced during main-branch analysis.'
+                    } else {
+                        echo 'Feature-branch report is available in SonarCloud; native branch Quality Gate is unavailable on the current organization plan.'
+                    }
+                }
             }
         }
 
