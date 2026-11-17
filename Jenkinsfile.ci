@@ -122,12 +122,10 @@ pipeline {
                         FAIL_CODE="$5"
 
                         docker run --rm \
-                          --user "$(id -u):$(id -g)" \
                           -v /var/run/docker.sock:/var/run/docker.sock \
                           -v "$PWD/reports:/reports" \
-                          -v "$PWD/.trivy-cache:/cache" \
+                          -v trivy-cache:/root/.cache/ \
                           "$TRIVY_IMAGE" image \
-                          --cache-dir /cache \
                           --scanners vuln \
                           --severity "$SEVERITY_SET" \
                           --format "$REPORT_FORMAT" \
