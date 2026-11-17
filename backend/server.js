@@ -4,6 +4,7 @@ const mysql = require('mysql')
 const cors = require('cors')
 
 const app = express()
+app.disable('x-powered-by')
 app.use(cors())
 app.use(express.json())
 
