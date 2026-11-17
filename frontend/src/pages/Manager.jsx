@@ -85,7 +85,7 @@ const Manager = () => {
 
     // Function to delete a doctor
     const deleteDoctor = async (doctorId) => {
-        await axios.delete(`/api/deleteDoctor/${doctorId}`);
+        await axios.delete('/api/deleteDoctor', { data: { doctorId } });
         window.location.reload();
     };
 
@@ -102,7 +102,7 @@ const Manager = () => {
 
     // Function to delete a nurse
     const deleteNurse = async (nurseId) => {
-        await axios.delete(`/api/deleteNurse/${nurseId}`);
+        await axios.delete('/api/deleteNurse', { data: { nurseId } });
         window.location.reload();
     };
 
@@ -119,7 +119,7 @@ const Manager = () => {
 
     // Function to delete equipment
     const deleteEquipment = async (equipmentId) => {
-        await axios.delete(`/api/deleteEquipment/${equipmentId}`);
+        await axios.delete('/api/deleteEquipment', { data: { equipmentId } });
         window.location.reload();
     };
 
@@ -136,7 +136,7 @@ const Manager = () => {
 
     // Function to delete staff
     const deleteStaff = async (staffId) => {
-        await axios.delete(`/api/deleteStaff/${staffId}`);
+        await axios.delete('/api/deleteStaff', { data: { staffId } });
         window.location.reload();
     };
 
@@ -153,7 +153,7 @@ const Manager = () => {
 
     // Function to delete a ward
     const deleteWard = async (wardId) => {
-        await axios.delete(`/api/deleteWard/${wardId}`);
+        await axios.delete('/api/deleteWard', { data: { wardId } });
         window.location.reload();
     };
 
