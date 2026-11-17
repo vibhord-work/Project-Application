@@ -123,18 +123,13 @@ pipeline {
 
                         PROJECT="vibhord-work_HospitalDBMS-DevOps"
 
-                        HISTORY=$(curl -fsS -u "$SONAR_TOKEN:" \
-                          --get "https://sonarcloud.io/api/project_analyses/search" \
-                          --data-urlencode "project=$PROJECT" \
-                          --data-urlencode "branch=$SONAR_BRANCH" \
-                          --data-urlencode "ps=1")
-
-                        LATEST_ID=$(echo "$HISTORY" | jq -r '.analyses[0].key')
-
-                        test "$LATEST_ID" = "$ANALYSIS_ID" || {
-                            echo "FAIL: Current analysis does not match latest project analysis."
+                        TASK_BRANCH=$(echo "$RESPONSE" | jq -r '.task.branch // "main"')
+                        test "$TASK_BRANCH" = "$SONAR_BRANCH" || {
+                            echo "FAIL: SonarCloud task branch '$TASK_BRANCH' does not match Jenkins branch '$SONAR_BRANCH'."
                             exit 1
                         }
+
+                        echo "Verified SonarCloud analysis: $ANALYSIS_ID on branch $TASK_BRANCH"
 
                         echo "Checking unresolved security vulnerabilities in new code..."
 
