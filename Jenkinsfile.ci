@@ -133,7 +133,8 @@ pipeline {
 
                         echo "Checking unresolved security vulnerabilities in new code..."
 
-                        ISSUES=$(curl -fsS -u "$SONAR_TOKEN:" \
+                        ISSUES=$(curl -fsS \
+                          -H "Authorization: Bearer $SONAR_TOKEN" \
                           --get "https://sonarcloud.io/api/issues/search" \
                           --data-urlencode "componentKeys=$PROJECT" \
                           --data-urlencode "branch=$SONAR_BRANCH" \
