@@ -408,74 +408,89 @@ app.get('/wards', (request, result) => {
 })
 
 
-app.delete('/deleteDoctor/:id', managerAuth, (request, result) => {
-    const doctorId = request.params.id;
-    const sql = "DELETE FROM Doctor WHERE doctor_id = ?"
+app.delete('/deleteDoctor', managerAuth, (request, result) => {
+    const doctorId = Number(request.body?.doctorId);
+    if (!Number.isSafeInteger(doctorId) || doctorId <= 0) {
+        return result.status(400).json({ error: 'Invalid doctor ID' });
+    }
+
+    const sql = "DELETE FROM Doctor WHERE doctor_id = ?";
     db.query(sql, [doctorId], (err, data) => {
-        if(err){
-            return result.json(err);
+        if (err) {
+            console.error('Doctor deletion failed:', err.code);
+            return result.status(503).json({ error: 'Unable to delete doctor' });
         }
-        else{
-            return result.json(data);
-        }
-    })
-})
+        return result.json({ success: true, affectedRows: data.affectedRows });
+    });
+});
 
 
 
-app.delete('/deleteNurse/:id', managerAuth, (request, result) => {
-    const nurseId = request.params.id;
-    const sql = "DELETE FROM Nurse WHERE nurse_id = ?"
+app.delete('/deleteNurse', managerAuth, (request, result) => {
+    const nurseId = Number(request.body?.nurseId);
+    if (!Number.isSafeInteger(nurseId) || nurseId <= 0) {
+        return result.status(400).json({ error: 'Invalid nurse ID' });
+    }
+
+    const sql = "DELETE FROM Nurse WHERE nurse_id = ?";
     db.query(sql, [nurseId], (err, data) => {
-        if(err){
-            return result.json(err);
+        if (err) {
+            console.error('Nurse deletion failed:', err.code);
+            return result.status(503).json({ error: 'Unable to delete nurse' });
         }
-        else{
-            return result.json(data);
-        }
-    })
-})
+        return result.json({ success: true, affectedRows: data.affectedRows });
+    });
+});
 
 
-app.delete('/deleteEquipment/:id', managerAuth, (request, result) => {
-    const equipmentId = request.params.id;
-    const sql = "DELETE FROM Equipment WHERE equipment_id = ?"
+app.delete('/deleteEquipment', managerAuth, (request, result) => {
+    const equipmentId = Number(request.body?.equipmentId);
+    if (!Number.isSafeInteger(equipmentId) || equipmentId <= 0) {
+        return result.status(400).json({ error: 'Invalid equipment ID' });
+    }
+
+    const sql = "DELETE FROM Equipment WHERE equipment_id = ?";
     db.query(sql, [equipmentId], (err, data) => {
-        if(err){
-            return result.json(err);
+        if (err) {
+            console.error('Equipment deletion failed:', err.code);
+            return result.status(503).json({ error: 'Unable to delete equipment' });
         }
-        else{
-            return result.json(data);
-        }
-    })
-})
+        return result.json({ success: true, affectedRows: data.affectedRows });
+    });
+});
 
 
-app.delete('/deleteStaff/:id', managerAuth, (request, result) => {
-    const staffId = request.params.id;
-    const sql = "DELETE FROM Staff WHERE staff_id = ?"
+app.delete('/deleteStaff', managerAuth, (request, result) => {
+    const staffId = Number(request.body?.staffId);
+    if (!Number.isSafeInteger(staffId) || staffId <= 0) {
+        return result.status(400).json({ error: 'Invalid staff ID' });
+    }
+
+    const sql = "DELETE FROM Staff WHERE staff_id = ?";
     db.query(sql, [staffId], (err, data) => {
-        if(err){
-            return result.json(err);
+        if (err) {
+            console.error('Staff deletion failed:', err.code);
+            return result.status(503).json({ error: 'Unable to delete staff' });
         }
-        else{
-            return result.json(data);
-        }
-    })
-})
+        return result.json({ success: true, affectedRows: data.affectedRows });
+    });
+});
 
-app.delete('/deleteWard/:id', managerAuth, (request, result) => {
-    const wardId = request.params.id;
-    const sql = "DELETE FROM Ward WHERE ward_id = ?"
+app.delete('/deleteWard', managerAuth, (request, result) => {
+    const wardId = Number(request.body?.wardId);
+    if (!Number.isSafeInteger(wardId) || wardId <= 0) {
+        return result.status(400).json({ error: 'Invalid ward ID' });
+    }
+
+    const sql = "DELETE FROM Ward WHERE ward_id = ?";
     db.query(sql, [wardId], (err, data) => {
-        if(err){
-            return result.json(err);
+        if (err) {
+            console.error('Ward deletion failed:', err.code);
+            return result.status(503).json({ error: 'Unable to delete ward' });
         }
-        else{
-            return result.json(data);
-        }
-    })
-})
+        return result.json({ success: true, affectedRows: data.affectedRows });
+    });
+});
 
 
 app.post('/addDoctor', managerAuth, (request, result) => {
