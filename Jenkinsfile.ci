@@ -106,19 +106,39 @@ pipeline {
                 sh '''
                     set -eu
                     mkdir -p reports
+                    TRIVY_IMAGE="aquasec/trivy:0.68.2"
+                    FRONTEND_IMAGE="hospital-frontend:build-${BUILD_NUMBER}-${GIT_COMMIT}"
+                    BACKEND_IMAGE="hospital-backend:build-${BUILD_NUMBER}-${GIT_COMMIT}"
+
+                    trivy_scan() {
+                        FORMAT="$1"
+                        OUTPUT="$2"
+                        TARGET="$3"
+                        docker run --rm \\
+                          -v /var/run/docker.sock:/var/run/docker.sock \\
+                          -v "$PWD:/work" -w /work \\
+                          "$TRIVY_IMAGE" image --scanners vuln \\
+                          --format "$FORMAT" --output "$OUTPUT" --exit-code 0 "$TARGET"
+                    }
+
                     echo "Generating complete Trivy JSON and table reports..."
-                    trivy image --scanners vuln --format json --output reports/trivy-frontend.json --exit-code 0 hospital-frontend:build-${BUILD_NUMBER}-${GIT_COMMIT}
-                    trivy image --scanners vuln --format table --output reports/trivy-frontend.txt --exit-code 0 hospital-frontend:build-${BUILD_NUMBER}-${GIT_COMMIT}
-                    trivy image --scanners vuln --format json --output reports/trivy-backend.json --exit-code 0 hospital-backend:build-${BUILD_NUMBER}-${GIT_COMMIT}
-                    trivy image --scanners vuln --format table --output reports/trivy-backend.txt --exit-code 0 hospital-backend:build-${BUILD_NUMBER}-${GIT_COMMIT}
+                    trivy_scan json reports/trivy-frontend.json "$FRONTEND_IMAGE"
+                    trivy_scan table reports/trivy-frontend.txt "$FRONTEND_IMAGE"
+                    trivy_scan json reports/trivy-backend.json "$BACKEND_IMAGE"
+                    trivy_scan table reports/trivy-backend.txt "$BACKEND_IMAGE"
 
                     echo "Enforcing HIGH/CRITICAL vulnerability gate..."
                     set +e
-                    trivy image --scanners vuln --severity HIGH,CRITICAL --exit-code 1 hospital-frontend:build-${BUILD_NUMBER}-${GIT_COMMIT}
+                    docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \\
+                      "$TRIVY_IMAGE" image --scanners vuln --severity HIGH,CRITICAL \\
+                      --exit-code 1 "$FRONTEND_IMAGE"
                     FRONTEND_SCAN_STATUS=$?
-                    trivy image --scanners vuln --severity HIGH,CRITICAL --exit-code 1 hospital-backend:build-${BUILD_NUMBER}-${GIT_COMMIT}
+                    docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \\
+                      "$TRIVY_IMAGE" image --scanners vuln --severity HIGH,CRITICAL \\
+                      --exit-code 1 "$BACKEND_IMAGE"
                     BACKEND_SCAN_STATUS=$?
                     set -e
+
                     if [ "$FRONTEND_SCAN_STATUS" -ne 0 ] || [ "$BACKEND_SCAN_STATUS" -ne 0 ]; then
                         echo "Trivy gate failed. Full reports are archived by the pipeline post action."
                         exit 1
