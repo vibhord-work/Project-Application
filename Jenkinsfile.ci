@@ -47,12 +47,18 @@ pipeline {
             steps {
                 script {
                     def scannerHome = tool 'SonarScanner'
+                    def sonarBranch = (env.CHANGE_BRANCH ?: env.BRANCH_NAME ?: env.GIT_BRANCH ?: 'main')
+                        .replaceFirst('^origin/', '')
+                        .replaceFirst('^refs/heads/', '')
+                    def sonarBranchArg = sonarBranch == 'main' ? '' : "-Dsonar.branch.name=${sonarBranch}"
+
 
                     withSonarQubeEnv('SonarQube-Cloud') {
                         sh """
                             "${scannerHome}/bin/sonar-scanner" \
                               -Dsonar.projectKey=vibhord-work_HospitalDBMS-DevOps \
                               -Dsonar.organization=vibhord-work \
+                              ${sonarBranchArg} \
                               -Dsonar.sources=backend,frontend/src \
                               -Dsonar.tests=backend/tests \
                               -Dsonar.test.inclusions=backend/tests/**/*.js \
@@ -71,6 +77,12 @@ pipeline {
                 withCredentials([string(credentialsId: 'sonarcloud-token', variable: 'SONAR_TOKEN')]) {
                     sh '''
                         set -eu
+                        SONAR_BRANCH="${BRANCH_NAME:-${GIT_BRANCH:-main}}"
+                        SONAR_BRANCH="${SONAR_BRANCH#origin/}"
+                        SONAR_BRANCH="${SONAR_BRANCH#refs/heads/}"
+
+                        echo "SonarCloud branch: $SONAR_BRANCH"
+
 
                         REPORT=".scannerwork/report-task.txt"
                         test -f "$REPORT" || {
@@ -114,6 +126,7 @@ pipeline {
                         HISTORY=$(curl -fsS -u "$SONAR_TOKEN:" \
                           --get "https://sonarcloud.io/api/project_analyses/search" \
                           --data-urlencode "project=$PROJECT" \
+                          --data-urlencode "branch=$SONAR_BRANCH" \
                           --data-urlencode "ps=1")
 
                         LATEST_ID=$(echo "$HISTORY" | jq -r '.analyses[0].key')
@@ -128,7 +141,7 @@ pipeline {
                         ISSUES=$(curl -fsS -u "$SONAR_TOKEN:" \
                           --get "https://sonarcloud.io/api/issues/search" \
                           --data-urlencode "componentKeys=$PROJECT" \
-                          --data-urlencode "branch=main" \
+                          --data-urlencode "branch=$SONAR_BRANCH" \
                           --data-urlencode "types=VULNERABILITY" \
                           --data-urlencode "resolved=false" \
                           --data-urlencode "inNewCodePeriod=true" \
