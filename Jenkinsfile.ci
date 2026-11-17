@@ -64,7 +64,8 @@ pipeline {
                               -Dsonar.test.inclusions=backend/tests/**/*.js \
                               -Dsonar.exclusions=backend/tests/**,backend/**/*.test.js,frontend/src/**/*.test.jsx,frontend/src/test/** \
                               -Dsonar.host.url=https://sonarcloud.io \
-                              -Dsonar.qualitygate.wait=false
+                              -Dsonar.qualitygate.wait=true
+                              -Dsonar.qualitygate.timeout=300
                         """
                     }
                 }
@@ -74,86 +75,18 @@ pipeline {
 
         stage('SonarCloud SAST Gate') {
             steps {
-                withCredentials([string(credentialsId: 'sonarcloud-token', variable: 'SONAR_TOKEN')]) {
-                    sh '''
-                        set -eu
-                        SONAR_BRANCH="${BRANCH_NAME:-${GIT_BRANCH:-main}}"
-                        SONAR_BRANCH="${SONAR_BRANCH#origin/}"
-                        SONAR_BRANCH="${SONAR_BRANCH#refs/heads/}"
+                script {
+                    def report = readFile('.scannerwork/report-task.txt')
+                    def taskUrl = report.readLines()
+                        .find { it.startsWith('ceTaskUrl=') }
+                        ?.substring('ceTaskUrl='.length())
 
-                        echo "SonarCloud branch: $SONAR_BRANCH"
+                    if (!taskUrl) {
+                        error('SonarCloud task metadata is missing.')
+                    }
 
-
-                        REPORT=".scannerwork/report-task.txt"
-                        test -f "$REPORT" || {
-                            echo "FAIL: SonarCloud task metadata missing."
-                            exit 1
-                        }
-
-                        TASK_URL=$(sed -n 's/^ceTaskUrl=//p' "$REPORT")
-                        test -n "$TASK_URL"
-
-                        echo "Waiting for current SonarCloud analysis..."
-
-                        STATUS="PENDING"
-
-                        for i in $(seq 1 60); do
-                            RESPONSE=$(curl -fsS -u "$SONAR_TOKEN:" "$TASK_URL")
-                            STATUS=$(echo "$RESPONSE" | jq -r '.task.status')
-
-                            case "$STATUS" in
-                                SUCCESS) break ;;
-                                FAILED|CANCELED)
-                                    echo "FAIL: SonarCloud analysis $STATUS"
-                                    exit 1
-                                    ;;
-                            esac
-
-                            sleep 5
-                        done
-
-                        test "$STATUS" = "SUCCESS" || {
-                            echo "FAIL: SonarCloud analysis timed out."
-                            exit 1
-                        }
-
-                        ANALYSIS_ID=$(echo "$RESPONSE" | jq -r '.task.analysisId')
-                        test -n "$ANALYSIS_ID"
-                        test "$ANALYSIS_ID" != "null"
-
-                        PROJECT="vibhord-work_HospitalDBMS-DevOps"
-
-                        TASK_BRANCH=$(echo "$RESPONSE" | jq -r '.task.branch // "main"')
-                        test "$TASK_BRANCH" = "$SONAR_BRANCH" || {
-                            echo "FAIL: SonarCloud task branch '$TASK_BRANCH' does not match Jenkins branch '$SONAR_BRANCH'."
-                            exit 1
-                        }
-
-                        echo "Verified SonarCloud analysis: $ANALYSIS_ID on branch $TASK_BRANCH"
-
-                        echo "Checking unresolved security vulnerabilities in new code..."
-
-                        ISSUES=$(curl -fsS \
-                          --get "https://sonarcloud.io/api/issues/search" \
-                          --data-urlencode "componentKeys=$PROJECT" \
-                          --data-urlencode "branch=$SONAR_BRANCH" \
-                          --data-urlencode "types=VULNERABILITY" \
-                          --data-urlencode "resolved=false" \
-                          --data-urlencode "inNewCodePeriod=true" \
-                          --data-urlencode "ps=1")
-
-                        COUNT=$(echo "$ISSUES" | jq -er '.total')
-
-                        echo "New unresolved security vulnerabilities: $COUNT"
-
-                        if [ "$COUNT" -gt 0 ]; then
-                            echo "FAIL: SonarCloud SAST security gate rejected the build."
-                            echo "$ISSUES" | jq -r '.issues[] | "- " + (.severity // "UNKNOWN") + ": " + .message'
-                            exit 1
-                        fi
-
-                        echo "PASS: SonarCloud SAST security gate."
-                    '''
+                    echo 'SonarCloud scanner completed with sonar.qualitygate.wait=true.'
+                    echo 'The scanner has already waited for and enforced the configured SonarCloud Quality Gate.'
                 }
             }
         }
