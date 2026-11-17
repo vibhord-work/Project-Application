@@ -1,0 +1,306 @@
+pipeline {
+    agent any
+
+    options {
+        timestamps()
+        disableConcurrentBuilds()
+    }
+
+    environment {
+        AWS_REGION     = 'us-east-1'
+        AWS_ACCOUNT_ID = '460249938865'
+        ECS_CLUSTER    = 'project-poc-ecs-cluster'
+
+        FRONTEND_REPO  = 'project-poc-frontend'
+        BACKEND_REPO   = 'project-poc-backend'
+
+        FRONTEND_SERVICE = 'project-poc-frontend-service'
+        BACKEND_SERVICE  = 'project-poc-backend-service'
+    }
+
+    stages {
+        stage('Checkout') {
+            steps {
+                checkout scm
+            }
+        }
+
+        stage('Validate Application') {
+            steps {
+                sh '''
+                    echo "Checking frontend dependencies..."
+                    test -f frontend/package-lock.json
+
+                    echo "Checking backend dependencies..."
+                    test -f backend/package-lock.json
+
+                    echo "Checking Dockerfiles..."
+                    test -f frontend/Dockerfile
+                    test -f backend/Dockerfile
+
+                    echo "Application structure validated."
+                '''
+            }
+        }
+
+        stage('SonarCloud Analysis') {
+            steps {
+                script {
+                    def scannerHome = tool 'SonarScanner'
+
+                    withSonarQubeEnv('SonarQube-Cloud') {
+                        sh """
+                            "${scannerHome}/bin/sonar-scanner" \
+                              -Dsonar.projectKey=vibhord-work_HospitalDBMS-DevOps \
+                              -Dsonar.organization=vibhord-work \
+                              -Dsonar.sources=backend,frontend/src \
+                              -Dsonar.tests=backend/tests \
+                              -Dsonar.test.inclusions=backend/tests/**/*.js \
+                              -Dsonar.exclusions=backend/tests/**,backend/**/*.test.js,frontend/src/**/*.test.jsx,frontend/src/test/** \
+                              -Dsonar.host.url=https://sonarcloud.io \
+                              -Dsonar.qualitygate.wait=false
+                        """
+                    }
+                }
+            }
+        }
+
+
+        stage('SonarCloud SAST Gate') {
+            steps {
+                withCredentials([string(credentialsId: 'sonarcloud-token', variable: 'SONAR_TOKEN')]) {
+                    sh '''
+                        set -eu
+
+                        REPORT=".scannerwork/report-task.txt"
+                        test -f "$REPORT" || {
+                            echo "FAIL: SonarCloud task metadata missing."
+                            exit 1
+                        }
+
+                        TASK_URL=$(sed -n 's/^ceTaskUrl=//p' "$REPORT")
+                        test -n "$TASK_URL"
+
+                        echo "Waiting for current SonarCloud analysis..."
+
+                        STATUS="PENDING"
+
+                        for i in $(seq 1 60); do
+                            RESPONSE=$(curl -fsS -u "$SONAR_TOKEN:" "$TASK_URL")
+                            STATUS=$(echo "$RESPONSE" | jq -r '.task.status')
+
+                            case "$STATUS" in
+                                SUCCESS) break ;;
+                                FAILED|CANCELED)
+                                    echo "FAIL: SonarCloud analysis $STATUS"
+                                    exit 1
+                                    ;;
+                            esac
+
+                            sleep 5
+                        done
+
+                        test "$STATUS" = "SUCCESS" || {
+                            echo "FAIL: SonarCloud analysis timed out."
+                            exit 1
+                        }
+
+                        ANALYSIS_ID=$(echo "$RESPONSE" | jq -r '.task.analysisId')
+                        test -n "$ANALYSIS_ID"
+                        test "$ANALYSIS_ID" != "null"
+
+                        PROJECT="vibhord-work_HospitalDBMS-DevOps"
+
+                        HISTORY=$(curl -fsS -u "$SONAR_TOKEN:" \
+                          --get "https://sonarcloud.io/api/project_analyses/search" \
+                          --data-urlencode "project=$PROJECT" \
+                          --data-urlencode "ps=1")
+
+                        LATEST_ID=$(echo "$HISTORY" | jq -r '.analyses[0].key')
+
+                        test "$LATEST_ID" = "$ANALYSIS_ID" || {
+                            echo "FAIL: Current analysis does not match latest project analysis."
+                            exit 1
+                        }
+
+                        echo "Checking unresolved security vulnerabilities in new code..."
+
+                        ISSUES=$(curl -fsS -u "$SONAR_TOKEN:" \
+                          --get "https://sonarcloud.io/api/issues/search" \
+                          --data-urlencode "componentKeys=$PROJECT" \
+                          --data-urlencode "branch=main" \
+                          --data-urlencode "types=VULNERABILITY" \
+                          --data-urlencode "resolved=false" \
+                          --data-urlencode "inNewCodePeriod=true" \
+                          --data-urlencode "ps=1")
+
+                        COUNT=$(echo "$ISSUES" | jq -er '.total')
+
+                        echo "New unresolved security vulnerabilities: $COUNT"
+
+                        if [ "$COUNT" -gt 0 ]; then
+                            echo "FAIL: SonarCloud SAST security gate rejected the build."
+                            echo "$ISSUES" | jq -r '.issues[] | "- " + (.severity // "UNKNOWN") + ": " + .message'
+                            exit 1
+                        fi
+
+                        echo "PASS: SonarCloud SAST security gate."
+                    '''
+                }
+            }
+        }
+
+        stage('Build Docker Images') {
+            steps {
+                sh '''
+                    docker build \
+                      --build-arg NGINX_CONFIG=nginx.aws.conf \
+                      -t hospital-frontend:build-${BUILD_NUMBER}-${GIT_COMMIT} \
+                      ./frontend
+
+                    docker build \
+                      -t hospital-backend:build-${BUILD_NUMBER}-${GIT_COMMIT} \
+                      ./backend
+                '''
+            }
+        }
+
+        stage('Trivy Image CVE Scan') {
+            steps {
+                sh '''
+                    set -eu
+
+                    docker run --rm \
+                      -v /var/run/docker.sock:/var/run/docker.sock \
+                      aquasec/trivy:0.68.2 image \
+                      --severity HIGH,CRITICAL \
+                      --exit-code 1 \
+                      --scanners vuln \
+                      "hospital-frontend:build-${BUILD_NUMBER}-${GIT_COMMIT}"
+
+                    docker run --rm \
+                      -v /var/run/docker.sock:/var/run/docker.sock \
+                      aquasec/trivy:0.68.2 image \
+                      --severity HIGH,CRITICAL \
+                      --exit-code 1 \
+                      --scanners vuln \
+                      "hospital-backend:build-${BUILD_NUMBER}-${GIT_COMMIT}"
+                '''
+            }
+        }
+
+        stage('Push Images to ECR') {
+            steps {
+                sh '''
+                    set -eu
+
+                    REGISTRY="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+
+                    aws ecr get-login-password --region "$AWS_REGION" | \
+                      docker login --username AWS --password-stdin "$REGISTRY"
+
+                    docker tag hospital-frontend:build-${BUILD_NUMBER}-${GIT_COMMIT} \
+                      "$REGISTRY/$FRONTEND_REPO:build-${BUILD_NUMBER}-${GIT_COMMIT}"
+
+                    docker tag hospital-backend:build-${BUILD_NUMBER}-${GIT_COMMIT} \
+                      "$REGISTRY/$BACKEND_REPO:build-${BUILD_NUMBER}-${GIT_COMMIT}"
+
+                    docker push "$REGISTRY/$FRONTEND_REPO:build-${BUILD_NUMBER}-${GIT_COMMIT}"
+                    docker push "$REGISTRY/$BACKEND_REPO:build-${BUILD_NUMBER}-${GIT_COMMIT}"
+                '''
+            }
+        }
+
+        stage('Record Approved Images') {
+            steps {
+                sh '''
+                    set -eu
+
+                    IMAGE_TAG="build-${BUILD_NUMBER}-${GIT_COMMIT}"
+                    REGISTRY="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+
+                    FRONTEND_DIGEST=$(aws ecr describe-images \
+                      --repository-name "$FRONTEND_REPO" \
+                      --image-ids imageTag="$IMAGE_TAG" \
+                      --region "$AWS_REGION" \
+                      --query 'imageDetails[0].imageDigest' \
+                      --output text)
+
+                    BACKEND_DIGEST=$(aws ecr describe-images \
+                      --repository-name "$BACKEND_REPO" \
+                      --image-ids imageTag="$IMAGE_TAG" \
+                      --region "$AWS_REGION" \
+                      --query 'imageDetails[0].imageDigest' \
+                      --output text)
+
+                    case "$FRONTEND_DIGEST" in
+                      sha256:*) ;;
+                      *) echo "Invalid frontend digest"; exit 1 ;;
+                    esac
+
+                    case "$BACKEND_DIGEST" in
+                      sha256:*) ;;
+                      *) echo "Invalid backend digest"; exit 1 ;;
+                    esac
+
+                    jq -n \
+                      --arg commit "$GIT_COMMIT" \
+                      --arg tag "$IMAGE_TAG" \
+                      --arg frontend "$REGISTRY/$FRONTEND_REPO@$FRONTEND_DIGEST" \
+                      --arg backend "$REGISTRY/$BACKEND_REPO@$BACKEND_DIGEST" \
+                      '{
+                        git_commit: $commit,
+                        image_tag: $tag,
+                        frontend_image: $frontend,
+                        backend_image: $backend
+                      }' > approved-images.json
+
+                    cat approved-images.json
+                '''
+
+                archiveArtifacts artifacts: 'approved-images.json', fingerprint: true
+            }
+        }
+        stage('Trigger CD Pipeline') {
+            steps {
+                script {
+                    def frontendImage = sh(
+                        script: "jq -r '.frontend_image' approved-images.json",
+                        returnStdout: true
+                    ).trim()
+
+                    def backendImage = sh(
+                        script: "jq -r '.backend_image' approved-images.json",
+                        returnStdout: true
+                    ).trim()
+
+                    if (!frontendImage || !backendImage ||
+                        frontendImage == 'null' || backendImage == 'null') {
+                        error('Approved image manifest is invalid.')
+                    }
+
+                    build job: 'pipeline-cd',
+                        wait: false,
+                        parameters: [
+                            string(name: 'FRONTEND_IMAGE', value: frontendImage),
+                            string(name: 'BACKEND_IMAGE', value: backendImage),
+                            string(name: 'CI_JOB_NAME', value: env.JOB_NAME),
+                            string(name: 'CI_BUILD_NUMBER', value: env.BUILD_NUMBER),
+                            string(name: 'CI_COMMIT', value: env.GIT_COMMIT)
+                        ]
+                }
+            }
+        }
+
+    }
+
+    post {
+        success {
+            echo 'Jenkins pipeline completed successfully.'
+        }
+
+        failure {
+            echo 'Jenkins CI pipeline failed. Check stage logs.'
+        }
+    }
+}
