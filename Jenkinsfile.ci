@@ -105,30 +105,62 @@ pipeline {
             steps {
                 sh '''
                     set -eu
-                    mkdir -p reports
-                    echo "Generating complete Trivy JSON and table reports..."
-                    trivy image --scanners vuln --format json --output reports/trivy-frontend.json --exit-code 0 hospital-frontend:build-${BUILD_NUMBER}-${GIT_COMMIT}
-                    trivy image --scanners vuln --format table --output reports/trivy-frontend.txt --exit-code 0 hospital-frontend:build-${BUILD_NUMBER}-${GIT_COMMIT}
-                    trivy image --scanners vuln --format json --output reports/trivy-backend.json --exit-code 0 hospital-backend:build-${BUILD_NUMBER}-${GIT_COMMIT}
-                    trivy image --scanners vuln --format table --output reports/trivy-backend.txt --exit-code 0 hospital-backend:build-${BUILD_NUMBER}-${GIT_COMMIT}
+
+                    TRIVY_IMAGE="aquasec/trivy:0.68.2"
+                    FRONTEND_IMAGE="hospital-frontend:build-${BUILD_NUMBER}-${GIT_COMMIT}"
+                    BACKEND_IMAGE="hospital-backend:build-${BUILD_NUMBER}-${GIT_COMMIT}"
+
+                    mkdir -p reports .trivy-cache
+                    echo "Pulling pinned Trivy scanner: $TRIVY_IMAGE"
+                    docker pull "$TRIVY_IMAGE"
+
+                    trivy_scan() {
+                        IMAGE_REF="$1"
+                        REPORT_FILE="$2"
+                        REPORT_FORMAT="$3"
+                        SEVERITY_SET="$4"
+                        FAIL_CODE="$5"
+
+                        docker run --rm \
+                          --user "$(id -u):$(id -g)" \
+                          -v /var/run/docker.sock:/var/run/docker.sock \
+                          -v "$PWD/reports:/reports" \
+                          -v "$PWD/.trivy-cache:/cache" \
+                          "$TRIVY_IMAGE" image \
+                          --cache-dir /cache \
+                          --scanners vuln \
+                          --severity "$SEVERITY_SET" \
+                          --format "$REPORT_FORMAT" \
+                          --output "/reports/$REPORT_FILE" \
+                          --exit-code "$FAIL_CODE" \
+                          "$IMAGE_REF"
+                    }
+
+                    echo "Generating full vulnerability reports..."
+                    trivy_scan "$FRONTEND_IMAGE" trivy-frontend.json json UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL 0
+                    trivy_scan "$FRONTEND_IMAGE" trivy-frontend.txt table UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL 0
+                    trivy_scan "$BACKEND_IMAGE" trivy-backend.json json UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL 0
+                    trivy_scan "$BACKEND_IMAGE" trivy-backend.txt table UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL 0
 
                     echo "Enforcing HIGH/CRITICAL vulnerability gate..."
                     set +e
-                    trivy image --scanners vuln --severity HIGH,CRITICAL --exit-code 1 hospital-frontend:build-${BUILD_NUMBER}-${GIT_COMMIT}
+                    trivy_scan "$FRONTEND_IMAGE" trivy-frontend-gate.txt table HIGH,CRITICAL 1
                     FRONTEND_SCAN_STATUS=$?
-                    trivy image --scanners vuln --severity HIGH,CRITICAL --exit-code 1 hospital-backend:build-${BUILD_NUMBER}-${GIT_COMMIT}
+                    trivy_scan "$BACKEND_IMAGE" trivy-backend-gate.txt table HIGH,CRITICAL 1
                     BACKEND_SCAN_STATUS=$?
                     set -e
+
                     if [ "$FRONTEND_SCAN_STATUS" -ne 0 ] || [ "$BACKEND_SCAN_STATUS" -ne 0 ]; then
-                        echo "Trivy gate failed. Full reports are archived by the pipeline post action."
+                        echo "Trivy security gate FAILED. ECR publishing and ECS deployment are blocked."
                         exit 1
                     fi
-                    echo "Trivy vulnerability gate passed."
+
+                    echo "Trivy security gate PASSED for frontend and backend."
                 '''
             }
             post {
                 always {
-                    archiveArtifacts artifacts: 'reports/trivy-*.json,reports/trivy-*.txt', fingerprint: true, allowEmptyArchive: true
+                    archiveArtifacts artifacts: 'reports/trivy-*', fingerprint: true, allowEmptyArchive: true
                 }
             }
         }
@@ -241,7 +273,7 @@ pipeline {
 
     post {
         always {
-            archiveArtifacts artifacts: 'reports/trivy-*.json,reports/trivy-*.txt', fingerprint: true, allowEmptyArchive: true
+            archiveArtifacts artifacts: 'reports/trivy-*', fingerprint: true, allowEmptyArchive: true
         }
 
         success {
