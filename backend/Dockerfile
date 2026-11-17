@@ -2,7 +2,7 @@ FROM node:22-alpine AS dependencies
 
 WORKDIR /app
 COPY package*.json ./
-RUN npm ci --omit=dev \
+RUN npm ci --omit=dev --ignore-scripts \
     && npm cache clean --force
 
 FROM node:22-alpine AS runtime
