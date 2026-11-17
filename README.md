@@ -238,3 +238,5 @@ Manager capabilities include:
 - Adding/removing doctors, nurses, staff, and equipment
 - Ward management and bed allocation
 - Hospital resource oversight and administration
+
+<- ECR and ECS read permissions tested webhook automation test -->
