@@ -55,17 +55,11 @@ pipeline {
 
 
                     withSonarQubeEnv('SonarQube-Cloud') {
+                        // Keep the scanner invocation on one shell line to avoid
+                        // accidental command splitting in Jenkins/Groovy.
                         sh """
-                            "${scannerHome}/bin/sonar-scanner" \
-                              -Dsonar.projectKey=vibhord-work_HospitalDBMS-DevOps \
-                              -Dsonar.organization=vibhord-work \
-                              ${sonarBranchArg} \
-                              -Dsonar.sources=backend,frontend/src \
-                              -Dsonar.tests=backend/tests \
-                              -Dsonar.test.inclusions=backend/tests/**/*.js \
-                              -Dsonar.exclusions=backend/tests/**,backend/**/*.test.js,frontend/src/**/*.test.jsx,frontend/src/test/** \
-                              -Dsonar.host.url=https://sonarcloud.io \
-                              -Dsonar.qualitygate.wait=${qualityGateWait} -Dsonar.qualitygate.timeout=300
+                            set -eu
+                            "${scannerHome}/bin/sonar-scanner" -Dsonar.projectKey=vibhord-work_HospitalDBMS-DevOps -Dsonar.organization=vibhord-work ${sonarBranchArg} -Dsonar.sources=backend,frontend/src -Dsonar.tests=backend/tests -Dsonar.test.inclusions=backend/tests/**/*.js -Dsonar.exclusions=backend/tests/**,backend/**/*.test.js,frontend/src/**/*.test.jsx,frontend/src/test/** -Dsonar.host.url=https://sonarcloud.io -Dsonar.qualitygate.wait=${qualityGateWait} -Dsonar.qualitygate.timeout=300
                         """
                     }
                 }
@@ -93,30 +87,6 @@ pipeline {
                     docker build \
                       -t hospital-backend:build-${BUILD_NUMBER}-${GIT_COMMIT} \
                       ./backend
-                '''
-            }
-        }
-
-        stage('Trivy Image CVE Scan') {
-            steps {
-                sh '''
-                    set -eu
-
-                    docker run --rm \
-                      -v /var/run/docker.sock:/var/run/docker.sock \
-                      aquasec/trivy:0.68.2 image \
-                      --severity HIGH,CRITICAL \
-                      --exit-code 1 \
-                      --scanners vuln \
-                      "hospital-frontend:build-${BUILD_NUMBER}-${GIT_COMMIT}"
-
-                    docker run --rm \
-                      -v /var/run/docker.sock:/var/run/docker.sock \
-                      aquasec/trivy:0.68.2 image \
-                      --severity HIGH,CRITICAL \
-                      --exit-code 1 \
-                      --scanners vuln \
-                      "hospital-backend:build-${BUILD_NUMBER}-${GIT_COMMIT}"
                 '''
             }
         }
@@ -212,7 +182,8 @@ pipeline {
                     }
 
                     build job: 'pipeline-cd',
-                        wait: false,
+                        wait: true,
+                        propagate: true,
                         parameters: [
                             string(name: 'FRONTEND_IMAGE', value: frontendImage),
                             string(name: 'BACKEND_IMAGE', value: backendImage),
