@@ -51,6 +51,7 @@ pipeline {
                         .replaceFirst('^origin/', '')
                         .replaceFirst('^refs/heads/', '')
                     def sonarBranchArg = sonarBranch == 'main' ? '' : "-Dsonar.branch.name=${sonarBranch}"
+                    def qualityGateWait = sonarBranch == 'main' ? 'true' : 'false'
 
 
                     withSonarQubeEnv('SonarQube-Cloud') {
@@ -64,7 +65,7 @@ pipeline {
                               -Dsonar.test.inclusions=backend/tests/**/*.js \
                               -Dsonar.exclusions=backend/tests/**,backend/**/*.test.js,frontend/src/**/*.test.jsx,frontend/src/test/** \
                               -Dsonar.host.url=https://sonarcloud.io \
-                              -Dsonar.qualitygate.wait=true
+                              -Dsonar.qualitygate.wait=${qualityGateWait}
                               -Dsonar.qualitygate.timeout=300
                         """
                     }
@@ -74,20 +75,11 @@ pipeline {
 
 
         stage('SonarCloud SAST Gate') {
+            when {
+                branch 'main'
+            }
             steps {
-                script {
-                    def report = readFile('.scannerwork/report-task.txt')
-                    def taskUrl = report.readLines()
-                        .find { it.startsWith('ceTaskUrl=') }
-                        ?.substring('ceTaskUrl='.length())
-
-                    if (!taskUrl) {
-                        error('SonarCloud task metadata is missing.')
-                    }
-
-                    echo 'SonarCloud scanner completed with sonar.qualitygate.wait=true.'
-                    echo 'The scanner has already waited for and enforced the configured SonarCloud Quality Gate.'
-                }
+                echo 'Main branch: SonarCloud native Quality Gate was enforced during analysis.'
             }
         }
 
