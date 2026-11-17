@@ -7,41 +7,19 @@ pipeline {
     }
 
     parameters {
-        string(
-            name: 'FRONTEND_IMAGE',
-            defaultValue: '',
-            description: 'Approved frontend ECR image URI with SHA-256 digest'
-        )
-        string(
-            name: 'BACKEND_IMAGE',
-            defaultValue: '',
-            description: 'Approved backend ECR image URI with SHA-256 digest'
-        )
-        string(
-            name: 'CI_JOB_NAME',
-            defaultValue: '',
-            description: 'Authorized upstream CI job'
-        )
-        string(
-            name: 'CI_BUILD_NUMBER',
-            defaultValue: '',
-            description: 'Successful upstream CI build number'
-        )
-        string(
-            name: 'CI_COMMIT',
-            defaultValue: '',
-            description: 'Source Git commit SHA'
-        )
+        string(name: 'FRONTEND_IMAGE', defaultValue: '', description: 'Approved frontend ECR image URI with SHA-256 digest')
+        string(name: 'BACKEND_IMAGE', defaultValue: '', description: 'Approved backend ECR image URI with SHA-256 digest')
+        string(name: 'CI_JOB_NAME', defaultValue: '', description: 'Authorized upstream CI job')
+        string(name: 'CI_BUILD_NUMBER', defaultValue: '', description: 'Successful upstream CI build number')
+        string(name: 'CI_COMMIT', defaultValue: '', description: 'Source Git commit SHA')
     }
 
     environment {
-        AWS_REGION     = 'us-east-1'
-        AWS_ACCOUNT_ID = '460249938865'
-        ECS_CLUSTER    = 'project-poc-ecs-cluster'
-
-        FRONTEND_REPO  = 'project-poc-frontend'
-        BACKEND_REPO   = 'project-poc-backend'
-
+        AWS_REGION       = 'us-east-1'
+        AWS_ACCOUNT_ID   = '460249938865'
+        ECS_CLUSTER      = 'project-poc-ecs-cluster'
+        FRONTEND_REPO    = 'project-poc-frontend'
+        BACKEND_REPO     = 'project-poc-backend'
         FRONTEND_SERVICE = 'project-poc-frontend-service'
         BACKEND_SERVICE  = 'project-poc-backend-service'
     }
@@ -53,7 +31,7 @@ pipeline {
             }
         }
 
-        stage('Deploy to ECS') {
+        stage('Validate Approved Images') {
             steps {
                 sh '''
                     set -eu
@@ -66,14 +44,10 @@ pipeline {
                     }
 
                     case "$CI_BUILD_NUMBER" in
-                        ''|*[!0-9]*)
-                            echo "ERROR: Invalid CI build number."
-                            exit 1
-                            ;;
+                        ''|*[!0-9]*) echo "ERROR: Invalid CI build number."; exit 1 ;;
                     esac
 
-                    printf '%s' "$CI_COMMIT" |
-                      grep -Eq '^[a-f0-9]{40}$' || {
+                    printf '%s' "$CI_COMMIT" | grep -Eq '^[a-f0-9]{40}$' || {
                         echo "ERROR: Invalid CI commit SHA."
                         exit 1
                     }
@@ -81,22 +55,16 @@ pipeline {
                     validate_image() {
                         IMAGE="$1"
                         REPOSITORY="$2"
-
-                        printf '%s\n' "$IMAGE" |
-                          grep -Eq "^${REGISTRY}/${REPOSITORY}@sha256:[a-f0-9]{64}$" || {
+                        printf '%s\\n' "$IMAGE" | grep -Eq "^${REGISTRY}/${REPOSITORY}@sha256:[a-f0-9]{64}$" || {
                             echo "ERROR: Invalid or unapproved image reference: $REPOSITORY"
                             exit 1
                         }
                     }
 
-                    validate_image "$FRONTEND_IMAGE" "$FRONTEND_REPO"
-                    validate_image "$BACKEND_IMAGE" "$BACKEND_REPO"
-
                     verify_ecr_image() {
                         IMAGE="$1"
                         REPOSITORY="$2"
                         DIGEST="${IMAGE##*@}"
-
                         ACTUAL=$(aws ecr describe-images \
                           --repository-name "$REPOSITORY" \
                           --image-ids imageDigest="$DIGEST" \
@@ -108,70 +76,143 @@ pipeline {
                             echo "ERROR: Image digest not found in ECR: $REPOSITORY"
                             exit 1
                         }
-
                         echo "Verified ECR image: $REPOSITORY@$DIGEST"
                     }
 
+                    validate_image "$FRONTEND_IMAGE" "$FRONTEND_REPO"
+                    validate_image "$BACKEND_IMAGE" "$BACKEND_REPO"
                     verify_ecr_image "$FRONTEND_IMAGE" "$FRONTEND_REPO"
                     verify_ecr_image "$BACKEND_IMAGE" "$BACKEND_REPO"
+                '''
+            }
+        }
+
+        stage('Deploy with Automatic Rollback') {
+            steps {
+                sh '''
+                    set -eu
+
+                    # Capture the task definitions currently attached to the services.
+                    FRONTEND_PREVIOUS=$(aws ecs describe-services \
+                      --cluster "$ECS_CLUSTER" \
+                      --services "$FRONTEND_SERVICE" \
+                      --region "$AWS_REGION" \
+                      --query 'services[0].taskDefinition' \
+                      --output text)
+
+                    BACKEND_PREVIOUS=$(aws ecs describe-services \
+                      --cluster "$ECS_CLUSTER" \
+                      --services "$BACKEND_SERVICE" \
+                      --region "$AWS_REGION" \
+                      --query 'services[0].taskDefinition' \
+                      --output text)
+
+                    for TASK_ARN in "$FRONTEND_PREVIOUS" "$BACKEND_PREVIOUS"; do
+                        case "$TASK_ARN" in
+                            arn:aws:ecs:*) ;;
+                            *)
+                                echo "ERROR: Could not capture both current ECS task definitions."
+                                exit 1
+                                ;;
+                        esac
+                    done
+
+                    echo "Rollback targets captured:"
+                    echo "Frontend: $FRONTEND_PREVIOUS"
+                    echo "Backend:  $BACKEND_PREVIOUS"
+
+                    DEPLOY_STARTED=1
+
+                    rollback_services() {
+                        echo "DEPLOYMENT FAILED: restoring the previously active ECS task definitions."
+                        set +e
+                        ROLLBACK_FAILED=0
+
+                        aws ecs update-service \
+                          --cluster "$ECS_CLUSTER" \
+                          --service "$FRONTEND_SERVICE" \
+                          --task-definition "$FRONTEND_PREVIOUS" \
+                          --region "$AWS_REGION"
+                        [ "$?" -eq 0 ] || ROLLBACK_FAILED=1
+
+                        aws ecs update-service \
+                          --cluster "$ECS_CLUSTER" \
+                          --service "$BACKEND_SERVICE" \
+                          --task-definition "$BACKEND_PREVIOUS" \
+                          --region "$AWS_REGION"
+                        [ "$?" -eq 0 ] || ROLLBACK_FAILED=1
+
+                        aws ecs wait services-stable \
+                          --cluster "$ECS_CLUSTER" \
+                          --services "$FRONTEND_SERVICE" "$BACKEND_SERVICE" \
+                          --region "$AWS_REGION"
+                        [ "$?" -eq 0 ] || ROLLBACK_FAILED=1
+
+                        if [ "$ROLLBACK_FAILED" -eq 0 ]; then
+                            echo "ROLLBACK SUCCESS: both ECS services are stable on their previous task definitions."
+                        else
+                            echo "ROLLBACK ERROR: automatic restoration did not fully complete. Manual intervention is required."
+                        fi
+                    }
+
+                    on_exit() {
+                        EXIT_STATUS=$?
+                        trap - EXIT
+                        if [ "$EXIT_STATUS" -ne 0 ] && [ "$DEPLOY_STARTED" -eq 1 ]; then
+                            rollback_services
+                        fi
+                        exit "$EXIT_STATUS"
+                    }
+                    trap on_exit EXIT
 
                     deploy_service() {
                         FAMILY="$1"
                         CONTAINER="$2"
                         SERVICE="$3"
                         IMAGE="$4"
+                        PREVIOUS_TASK="$5"
+                        TASK_FILE="task-$CONTAINER.json"
+                        NEW_TASK_FILE="new-task-$CONTAINER.json"
 
-                        echo "Deploying $SERVICE with image $IMAGE"
+                        echo "Preparing deployment for $SERVICE"
 
                         aws ecs describe-task-definition \
-                          --task-definition "$FAMILY" \
+                          --task-definition "$PREVIOUS_TASK" \
                           --region "$AWS_REGION" \
                           --query taskDefinition \
-                          --output json > current-task.json
+                          --output json > "$TASK_FILE"
 
-                        # Verify the expected container exists
                         jq -e --arg CONTAINER "$CONTAINER" \
                           '.containerDefinitions | any(.name == $CONTAINER)' \
-                          current-task.json > /dev/null
+                          "$TASK_FILE" > /dev/null
 
-                        jq --arg IMAGE "$IMAGE" \
-                           --arg CONTAINER "$CONTAINER" '
+                        jq --arg IMAGE "$IMAGE" --arg CONTAINER "$CONTAINER" '
                           .containerDefinitions |= map(
-                            if .name == $CONTAINER
-                            then .image = $IMAGE
-                            else .
-                            end
+                            if .name == $CONTAINER then .image = $IMAGE else . end
                           )
                           | del(
-                              .taskDefinitionArn,
-                              .revision,
-                              .status,
-                              .requiresAttributes,
-                              .compatibilities,
-                              .registeredAt,
-                              .registeredBy,
-                              .deregisteredAt
+                              .taskDefinitionArn, .revision, .status,
+                              .requiresAttributes, .compatibilities,
+                              .registeredAt, .registeredBy, .deregisteredAt
                             )
-                        ' current-task.json > new-task.json
+                        ' "$TASK_FILE" > "$NEW_TASK_FILE"
 
                         NEW_TASK_ARN=$(aws ecs register-task-definition \
-                          --cli-input-json file://new-task.json \
+                          --cli-input-json "file://$NEW_TASK_FILE" \
                           --region "$AWS_REGION" \
                           --query 'taskDefinition.taskDefinitionArn' \
                           --output text)
 
-                        echo "Registered task definition: $NEW_TASK_ARN"
+                        test -n "$NEW_TASK_ARN"
+                        echo "Registered $NEW_TASK_ARN"
 
                         aws ecs update-service \
                           --cluster "$ECS_CLUSTER" \
                           --service "$SERVICE" \
                           --task-definition "$NEW_TASK_ARN" \
-                          --region "$AWS_REGION" \
-                          --query 'service.{Name:serviceName,TaskDefinition:taskDefinition}' \
-                          --output table
+                          --region "$AWS_REGION"
 
                         echo "Waiting for $SERVICE to become stable..."
-
                         aws ecs wait services-stable \
                           --cluster "$ECS_CLUSTER" \
                           --services "$SERVICE" \
@@ -181,16 +222,16 @@ pipeline {
                     }
 
                     deploy_service \
-                      "project-poc-frontend" \
-                      "frontend" \
-                      "$FRONTEND_SERVICE" \
-                      "$FRONTEND_IMAGE"
+                      "project-poc-frontend" "frontend" \
+                      "$FRONTEND_SERVICE" "$FRONTEND_IMAGE" "$FRONTEND_PREVIOUS"
 
                     deploy_service \
-                      "project-poc-backend" \
-                      "backend" \
-                      "$BACKEND_SERVICE" \
-                      "$BACKEND_IMAGE"
+                      "project-poc-backend" "backend" \
+                      "$BACKEND_SERVICE" "$BACKEND_IMAGE" "$BACKEND_PREVIOUS"
+
+                    DEPLOY_STARTED=0
+                    trap - EXIT
+                    echo "Both ECS services deployed and stable. No rollback required."
                 '''
             }
         }
@@ -198,11 +239,10 @@ pipeline {
 
     post {
         success {
-            echo 'Jenkins pipeline completed successfully.'
+            echo 'Jenkins CD pipeline completed successfully.'
         }
-
         failure {
-            echo 'Jenkins CD pipeline failed. Check stage logs.'
+            echo 'Jenkins CD pipeline failed. Automatic ECS rollback was attempted if deployment had started; verify rollback messages in the console log.'
         }
     }
 }
