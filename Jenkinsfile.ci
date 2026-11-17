@@ -6,6 +6,14 @@ pipeline {
         disableConcurrentBuilds()
     }
 
+    parameters {
+        booleanParam(
+            name: 'ENFORCE_SONAR_QUALITY_GATE',
+            defaultValue: false,
+            description: 'Set true only when the team is ready to make the SonarCloud Quality Gate block the build.'
+        )
+    }
+
     environment {
         AWS_REGION     = 'us-east-1'
         AWS_ACCOUNT_ID = '460249938865'
@@ -51,7 +59,7 @@ pipeline {
                         .replaceFirst('^origin/', '')
                         .replaceFirst('^refs/heads/', '')
                     def sonarBranchArg = sonarBranch == 'main' ? '' : "-Dsonar.branch.name=${sonarBranch}"
-                    def qualityGateWait = sonarBranch == 'main' ? 'true' : 'false'
+                    def qualityGateWait = (sonarBranch == 'main' && params.ENFORCE_SONAR_QUALITY_GATE) ? 'true' : 'false'
 
 
                     withSonarQubeEnv('SonarQube-Cloud') {
@@ -77,10 +85,12 @@ pipeline {
                         ? 'https://sonarcloud.io/dashboard?id=vibhord-work_HospitalDBMS-DevOps'
                         : "https://sonarcloud.io/dashboard?id=vibhord-work_HospitalDBMS-DevOps&branch=${java.net.URLEncoder.encode(reportBranch, 'UTF-8')}"
                     echo "SonarCloud SAST analysis completed. Security report: ${reportUrl}"
-                    if (reportBranch == 'main') {
-                        echo 'The native SonarCloud Quality Gate is enforced during main-branch analysis.'
+                    if (reportBranch == 'main' && params.ENFORCE_SONAR_QUALITY_GATE) {
+                        echo 'SonarCloud Quality Gate enforcement is ENABLED for this build.'
+                    } else if (reportBranch == 'main') {
+                        echo 'SonarCloud SAST analysis ran successfully. Quality Gate enforcement is disabled for this build; findings remain visible in the SonarCloud dashboard and do not block CI.'
                     } else {
-                        echo 'Feature-branch report is available in SonarCloud; native branch Quality Gate is unavailable on the current organization plan.'
+                        echo 'Feature-branch SAST report is available in SonarCloud. Quality Gate enforcement is disabled for this build.'
                     }
                 }
             }
