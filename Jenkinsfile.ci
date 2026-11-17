@@ -65,7 +65,7 @@ pipeline {
                               -Dsonar.test.inclusions=backend/tests/**/*.js \
                               -Dsonar.exclusions=backend/tests/**,backend/**/*.test.js,frontend/src/**/*.test.jsx,frontend/src/test/** \
                               -Dsonar.host.url=https://sonarcloud.io \
-                              -Dsonar.qualitygate.wait=${qualityGateWait}
+                              -Dsonar.qualitygate.wait=${qualityGateWait} \
                               -Dsonar.qualitygate.timeout=300
                         """
                     }
