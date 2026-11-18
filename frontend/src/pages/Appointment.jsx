@@ -15,7 +15,7 @@ const Appointment = () => {
         fetch(`/api/doctors/${docId}`)
         .then(res => res.json())
         .then (data => setData(data))
-        .then(loaded => setLoaded(true))
+        .then(() => setLoaded(true))
         .catch(err => console.log(err))
     }, [docId])
 
