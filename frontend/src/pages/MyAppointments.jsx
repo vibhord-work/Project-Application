@@ -1,7 +1,6 @@
 import React, { useContext, useState, useEffect } from 'react'
 import { AppContext } from '../context/AppContext'
 import { assets } from '../assets/assets'
-import { useNavigate } from 'react-router-dom'
 
 const MyAppointments = () => {
 
@@ -9,15 +8,13 @@ const MyAppointments = () => {
     const [loaded, setLoaded] = useState(false)
     const {patientId} = useContext(AppContext)
 
-    const navigate = useNavigate()
-
     useEffect( () => {
         fetch(`/api/patientAppointments/${patientId}`)
         .then(res => res.json())
         .then (data => setData(data))
-        .then(loaded => setLoaded(true))
+        .then(() => setLoaded(true))
         .catch(err => console.log(err))
-    }, [loaded])
+    }, [loaded, patientId])
 
     const handleCancel = async (appointmentId) => {
 
