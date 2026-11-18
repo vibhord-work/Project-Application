@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react'
+import React, { useCallback, useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { assets } from '../assets/assets'
 
@@ -17,18 +17,18 @@ const Doctors = () => {
         .catch(err => console.log(err));
     }, [])
 
-    const applyFilter = () => {
+    const applyFilter = useCallback(() => {
         if(speciality){
             setFilterDoc(data.filter(doc => doc.specialization === speciality))
         }
         else{
             setFilterDoc(data)
         }
-    }
+    }, [data, speciality])
 
     useEffect(() => {
         applyFilter();
-    }, [data, speciality])
+    }, [applyFilter])
 
     return (
         <div>
