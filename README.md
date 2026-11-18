@@ -1,6 +1,6 @@
 # Hospital Database Management System
 
-Full-stack Hospital Management System built with React.js frontend, Express.js backend, and MySQL database. The system efficiently manages patient records, appointments, doctors, nurses, prescriptions, treatments, billing, and hospital resources through a well-structured database schema and intuitive user interface.
+A Full-stack Hospital Management System built with React.js frontend, Express.js backend, and MySQL database. The system efficiently manages patient records, appointments, doctors, nurses, prescriptions, treatments, billing, and hospital resources through a well-structured database schema and intuitive user interface.
 
 ## Features
 
