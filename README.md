@@ -242,3 +242,5 @@ Manager capabilities include:
 <- ECR and ECS read permissions tested webhook automation test -->
 
 <- ECR and ECS read permissions tested webhook automation test -->
+
+<- ECR and ECS read permissions tested GitHub webhook integration test: 18-Nov-2026 -->
