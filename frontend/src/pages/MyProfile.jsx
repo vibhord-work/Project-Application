@@ -11,9 +11,9 @@ const MyProfile = () => {
         fetch(`/api/patientProfile/${patientId}`)
         .then(res => res.json())
         .then (data => setData(data[0]))
-        .then(loaded => setLoaded(true))
+        .then(() => setLoaded(true))
         .catch(err => console.log(err))
-    }, [])
+    }, [patientId])
 
     return loaded && (
         <div className='max-w-lg flex flex-col gap-2 text-xl'>
