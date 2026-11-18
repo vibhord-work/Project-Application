@@ -71,7 +71,7 @@ describe('Manager record creation', () => {
     )
     axios.post.mockResolvedValue({ data: { success: true } })
 
-    const { container } = render(<Manager />)
+    render(<Manager />)
 
     await screen.findByRole('heading', { name: 'Add Doctor' })
 
