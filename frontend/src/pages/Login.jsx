@@ -5,7 +5,6 @@ import { useNavigate } from 'react-router-dom'
 const Login = () => {
 
     const [state,setState] = useState('Sign Up')
-    const [data, setData] = useState(0)
     const [loaded, setLoaded] = useState(false)
 
     const [fname, setFname] = useState('')
@@ -21,9 +20,8 @@ const Login = () => {
     const [conditions, setConditions] = useState('')
     const [password, setPassword] = useState('')
 
-    const { patientId, setPatientId, token, setToken } = useContext(AppContext)
+    const { patientId, setPatientId, setToken } = useContext(AppContext)
     const [invalid, setInvalid] = useState(false)
-    const [actualPass, setActualPass] = useState('')
 
     const navigate = useNavigate()
 
