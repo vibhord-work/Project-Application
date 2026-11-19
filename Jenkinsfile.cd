@@ -3,7 +3,6 @@ pipeline {
 
     options {
         timestamps()
-        disableConcurrentBuilds()
     }
 
     parameters {
@@ -96,180 +95,182 @@ pipeline {
 
         stage('Deploy with Automatic Rollback') {
             steps {
-                sh '''
-                    set -eu
+                lock(resource: 'project-poc-ecs-deployment') {
+                    sh '''
+                        set -eu
 
-                    # Capture the task definitions currently attached to the services.
-                    FRONTEND_PREVIOUS=$(aws ecs describe-services \
-                        --cluster "$ECS_CLUSTER" \
-                        --services "$FRONTEND_SERVICE" \
-                        --region "$AWS_REGION" \
-                        --query 'services[0].taskDefinition' \
-                        --output text)
-
-                    BACKEND_PREVIOUS=$(aws ecs describe-services \
-                        --cluster "$ECS_CLUSTER" \
-                        --services "$BACKEND_SERVICE" \
-                        --region "$AWS_REGION" \
-                        --query 'services[0].taskDefinition' \
-                        --output text)
-
-                    for TASK_ARN in "$FRONTEND_PREVIOUS" "$BACKEND_PREVIOUS"; do
-                        case "$TASK_ARN" in
-                            arn:aws:ecs:*) ;;
-                            *)
-                                echo "ERROR: Could not capture both current ECS task definitions."
-                                exit 1
-                                ;;
-                        esac
-                    done
-
-                    echo "Rollback targets captured:"
-                    echo "Frontend: $FRONTEND_PREVIOUS"
-                    echo "Backend: $BACKEND_PREVIOUS"
-
-                    DEPLOY_STARTED=1
-
-                    rollback_services() {
-                        echo "DEPLOYMENT FAILED: restoring the previously active ECS task definitions."
-                        set +e
-                        ROLLBACK_FAILED=0
-
-                        aws ecs update-service \
+                        # Capture the task definitions currently attached to the services.
+                        FRONTEND_PREVIOUS=$(aws ecs describe-services \
                             --cluster "$ECS_CLUSTER" \
-                            --service "$FRONTEND_SERVICE" \
-                            --task-definition "$FRONTEND_PREVIOUS" \
-                            --region "$AWS_REGION"
-                        [ "$?" -eq 0 ] || ROLLBACK_FAILED=1
-
-                        aws ecs update-service \
-                            --cluster "$ECS_CLUSTER" \
-                            --service "$BACKEND_SERVICE" \
-                            --task-definition "$BACKEND_PREVIOUS" \
-                            --region "$AWS_REGION"
-                        [ "$?" -eq 0 ] || ROLLBACK_FAILED=1
-
-                        aws ecs wait services-stable \
-                            --cluster "$ECS_CLUSTER" \
-                            --services "$FRONTEND_SERVICE" "$BACKEND_SERVICE" \
-                            --region "$AWS_REGION"
-                        [ "$?" -eq 0 ] || ROLLBACK_FAILED=1
-
-                        if [ "$ROLLBACK_FAILED" -eq 0 ]; then
-                            echo "ROLLBACK SUCCESS: both ECS services are stable on their previous task definitions."
-                        else
-                            echo "ROLLBACK ERROR: automatic restoration did not fully complete. Manual intervention is required."
-                        fi
-                    }
-
-                    on_exit() {
-                        EXIT_STATUS=$?
-                        trap - EXIT
-                        if [ "$EXIT_STATUS" -ne 0 ] && [ "$DEPLOY_STARTED" -eq 1 ]; then
-                            rollback_services
-                        fi
-                        exit "$EXIT_STATUS"
-                    }
-
-                    trap on_exit EXIT
-
-                    deploy_service() {
-                        FAMILY="$1"
-                        CONTAINER="$2"
-                        SERVICE="$3"
-                        IMAGE="$4"
-                        PREVIOUS_TASK="$5"
-
-                        TASK_FILE="task-$CONTAINER.json"
-                        NEW_TASK_FILE="new-task-$CONTAINER.json"
-
-                        echo "Preparing deployment for $SERVICE"
-
-                        aws ecs describe-task-definition \
-                            --task-definition "$PREVIOUS_TASK" \
+                            --services "$FRONTEND_SERVICE" \
                             --region "$AWS_REGION" \
-                            --query taskDefinition \
-                            --output json > "$TASK_FILE"
+                            --query 'services[0].taskDefinition' \
+                            --output text)
 
-                        jq -e --arg CONTAINER "$CONTAINER" \
-                            '.containerDefinitions | any(.name == $CONTAINER)' \
-                            "$TASK_FILE" > /dev/null
+                        BACKEND_PREVIOUS=$(aws ecs describe-services \
+                            --cluster "$ECS_CLUSTER" \
+                            --services "$BACKEND_SERVICE" \
+                            --region "$AWS_REGION" \
+                            --query 'services[0].taskDefinition' \
+                            --output text)
 
-                        jq --arg IMAGE "$IMAGE" --arg CONTAINER "$CONTAINER" '
-                            .containerDefinitions |= map(
-                                if .name == $CONTAINER then
-                                    .image = $IMAGE
-                                    | if $CONTAINER == "backend" then
-                                        .environment = (
-                                            (.environment // [])
-                                            | map(select(
-                                                .name != "DB_HOST"
-                                                and .name != "DB_PORT"
-                                                and .name != "DB_NAME"
-                                            ))
-                                        )
-                                        | .secrets = (
-                                            (.secrets // [])
-                                            | map(select(
-                                                .name != "DB_USER"
-                                                and .name != "DB_PASSWORD"
-                                            ))
-                                        )
+                        for TASK_ARN in "$FRONTEND_PREVIOUS" "$BACKEND_PREVIOUS"; do
+                            case "$TASK_ARN" in
+                                arn:aws:ecs:*) ;;
+                                *)
+                                    echo "ERROR: Could not capture both current ECS task definitions."
+                                    exit 1
+                                    ;;
+                            esac
+                        done
+
+                        echo "Rollback targets captured:"
+                        echo "Frontend: $FRONTEND_PREVIOUS"
+                        echo "Backend: $BACKEND_PREVIOUS"
+
+                        DEPLOY_STARTED=1
+
+                        rollback_services() {
+                            echo "DEPLOYMENT FAILED: restoring the previously active ECS task definitions."
+                            set +e
+                            ROLLBACK_FAILED=0
+
+                            aws ecs update-service \
+                                --cluster "$ECS_CLUSTER" \
+                                --service "$FRONTEND_SERVICE" \
+                                --task-definition "$FRONTEND_PREVIOUS" \
+                                --region "$AWS_REGION"
+                            [ "$?" -eq 0 ] || ROLLBACK_FAILED=1
+
+                            aws ecs update-service \
+                                --cluster "$ECS_CLUSTER" \
+                                --service "$BACKEND_SERVICE" \
+                                --task-definition "$BACKEND_PREVIOUS" \
+                                --region "$AWS_REGION"
+                            [ "$?" -eq 0 ] || ROLLBACK_FAILED=1
+
+                            aws ecs wait services-stable \
+                                --cluster "$ECS_CLUSTER" \
+                                --services "$FRONTEND_SERVICE" "$BACKEND_SERVICE" \
+                                --region "$AWS_REGION"
+                            [ "$?" -eq 0 ] || ROLLBACK_FAILED=1
+
+                            if [ "$ROLLBACK_FAILED" -eq 0 ]; then
+                                echo "ROLLBACK SUCCESS: both ECS services are stable on their previous task definitions."
+                            else
+                                echo "ROLLBACK ERROR: automatic restoration did not fully complete. Manual intervention is required."
+                            fi
+                        }
+
+                        on_exit() {
+                            EXIT_STATUS=$?
+                            trap - EXIT
+                            if [ "$EXIT_STATUS" -ne 0 ] && [ "$DEPLOY_STARTED" -eq 1 ]; then
+                                rollback_services
+                            fi
+                            exit "$EXIT_STATUS"
+                        }
+
+                        trap on_exit EXIT
+
+                        deploy_service() {
+                            FAMILY="$1"
+                            CONTAINER="$2"
+                            SERVICE="$3"
+                            IMAGE="$4"
+                            PREVIOUS_TASK="$5"
+
+                            TASK_FILE="task-$CONTAINER.json"
+                            NEW_TASK_FILE="new-task-$CONTAINER.json"
+
+                            echo "Preparing deployment for $SERVICE"
+
+                            aws ecs describe-task-definition \
+                                --task-definition "$PREVIOUS_TASK" \
+                                --region "$AWS_REGION" \
+                                --query taskDefinition \
+                                --output json > "$TASK_FILE"
+
+                            jq -e --arg CONTAINER "$CONTAINER" \
+                                '.containerDefinitions | any(.name == $CONTAINER)' \
+                                "$TASK_FILE" > /dev/null
+
+                            jq --arg IMAGE "$IMAGE" --arg CONTAINER "$CONTAINER" '
+                                .containerDefinitions |= map(
+                                    if .name == $CONTAINER then
+                                        .image = $IMAGE
+                                        | if $CONTAINER == "backend" then
+                                            .environment = (
+                                                (.environment // [])
+                                                | map(select(
+                                                    .name != "DB_HOST"
+                                                    and .name != "DB_PORT"
+                                                    and .name != "DB_NAME"
+                                                ))
+                                            )
+                                            | .secrets = (
+                                                (.secrets // [])
+                                                | map(select(
+                                                    .name != "DB_USER"
+                                                    and .name != "DB_PASSWORD"
+                                                ))
+                                            )
+                                        else
+                                            .
+                                        end
                                     else
                                         .
                                     end
-                                else
-                                    .
-                                end
-                            )
-                            | del(
-                                .taskDefinitionArn,
-                                .revision,
-                                .status,
-                                .requiresAttributes,
-                                .compatibilities,
-                                .registeredAt,
-                                .registeredBy,
-                                .deregisteredAt
-                            )
-                        ' "$TASK_FILE" > "$NEW_TASK_FILE"
+                                )
+                                | del(
+                                    .taskDefinitionArn,
+                                    .revision,
+                                    .status,
+                                    .requiresAttributes,
+                                    .compatibilities,
+                                    .registeredAt,
+                                    .registeredBy,
+                                    .deregisteredAt
+                                )
+                            ' "$TASK_FILE" > "$NEW_TASK_FILE"
 
-                        NEW_TASK_ARN=$(aws ecs register-task-definition \
-                          --cli-input-json "file://$NEW_TASK_FILE" \
-                          --region "$AWS_REGION" \
-                          --query 'taskDefinition.taskDefinitionArn' \
-                          --output text)
+                            NEW_TASK_ARN=$(aws ecs register-task-definition \
+                              --cli-input-json "file://$NEW_TASK_FILE" \
+                              --region "$AWS_REGION" \
+                              --query 'taskDefinition.taskDefinitionArn' \
+                              --output text)
 
-                        test -n "$NEW_TASK_ARN"
-                        echo "Registered $NEW_TASK_ARN"
+                            test -n "$NEW_TASK_ARN"
+                            echo "Registered $NEW_TASK_ARN"
 
-                        aws ecs update-service \
-                          --cluster "$ECS_CLUSTER" \
-                          --service "$SERVICE" \
-                          --task-definition "$NEW_TASK_ARN" \
-                          --region "$AWS_REGION"
+                            aws ecs update-service \
+                              --cluster "$ECS_CLUSTER" \
+                              --service "$SERVICE" \
+                              --task-definition "$NEW_TASK_ARN" \
+                              --region "$AWS_REGION"
 
-                        echo "Waiting for $SERVICE to become stable..."
-                        aws ecs wait services-stable \
-                          --cluster "$ECS_CLUSTER" \
-                          --services "$SERVICE" \
-                          --region "$AWS_REGION"
+                            echo "Waiting for $SERVICE to become stable..."
+                            aws ecs wait services-stable \
+                              --cluster "$ECS_CLUSTER" \
+                              --services "$SERVICE" \
+                              --region "$AWS_REGION"
 
-                        echo "$SERVICE deployment completed."
-                    }
+                            echo "$SERVICE deployment completed."
+                        }
 
-                    deploy_service \
-                      "project-poc-frontend" "frontend" \
-                      "$FRONTEND_SERVICE" "$FRONTEND_IMAGE" "$FRONTEND_PREVIOUS"
+                        deploy_service \
+                          "project-poc-frontend" "frontend" \
+                          "$FRONTEND_SERVICE" "$FRONTEND_IMAGE" "$FRONTEND_PREVIOUS"
 
-                    deploy_service \
-                      "project-poc-backend" "backend" \
-                      "$BACKEND_SERVICE" "$BACKEND_IMAGE" "$BACKEND_PREVIOUS"
+                        deploy_service \
+                          "project-poc-backend" "backend" \
+                          "$BACKEND_SERVICE" "$BACKEND_IMAGE" "$BACKEND_PREVIOUS"
 
-                    DEPLOY_STARTED=0
-                    trap - EXIT
-                    echo "Both ECS services deployed and stable. No rollback required."
-                '''
+                        DEPLOY_STARTED=0
+                        trap - EXIT
+                        echo "Both ECS services deployed and stable. No rollback required."
+                    '''
+                }
             }
         }
     }
