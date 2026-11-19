@@ -44,7 +44,10 @@ pipeline {
                     }
 
                     case "$CI_BUILD_NUMBER" in
-                        ''|*[!0-9]*) echo "ERROR: Invalid CI build number."; exit 1 ;;
+                        ''|*[!0-9]*)
+                            echo "ERROR: Invalid CI build number."
+                            exit 1
+                            ;;
                     esac
 
                     printf '%s' "$CI_COMMIT" | grep -Eq '^[a-f0-9]{40}$' || {
@@ -55,6 +58,7 @@ pipeline {
                     validate_image() {
                         IMAGE="$1"
                         REPOSITORY="$2"
+
                         printf '%s\\n' "$IMAGE" | grep -Eq "^${REGISTRY}/${REPOSITORY}@sha256:[a-f0-9]{64}$" || {
                             echo "ERROR: Invalid or unapproved image reference: $REPOSITORY"
                             exit 1
@@ -65,22 +69,25 @@ pipeline {
                         IMAGE="$1"
                         REPOSITORY="$2"
                         DIGEST="${IMAGE##*@}"
+
                         ACTUAL=$(aws ecr describe-images \
-                          --repository-name "$REPOSITORY" \
-                          --image-ids imageDigest="$DIGEST" \
-                          --region "$AWS_REGION" \
-                          --query 'imageDetails[0].imageDigest' \
-                          --output text)
+                            --repository-name "$REPOSITORY" \
+                            --image-ids imageDigest="$DIGEST" \
+                            --region "$AWS_REGION" \
+                            --query 'imageDetails[0].imageDigest' \
+                            --output text)
 
                         test "$ACTUAL" = "$DIGEST" || {
                             echo "ERROR: Image digest not found in ECR: $REPOSITORY"
                             exit 1
                         }
+
                         echo "Verified ECR image: $REPOSITORY@$DIGEST"
                     }
 
                     validate_image "$FRONTEND_IMAGE" "$FRONTEND_REPO"
                     validate_image "$BACKEND_IMAGE" "$BACKEND_REPO"
+
                     verify_ecr_image "$FRONTEND_IMAGE" "$FRONTEND_REPO"
                     verify_ecr_image "$BACKEND_IMAGE" "$BACKEND_REPO"
                 '''
@@ -94,18 +101,18 @@ pipeline {
 
                     # Capture the task definitions currently attached to the services.
                     FRONTEND_PREVIOUS=$(aws ecs describe-services \
-                      --cluster "$ECS_CLUSTER" \
-                      --services "$FRONTEND_SERVICE" \
-                      --region "$AWS_REGION" \
-                      --query 'services[0].taskDefinition' \
-                      --output text)
+                        --cluster "$ECS_CLUSTER" \
+                        --services "$FRONTEND_SERVICE" \
+                        --region "$AWS_REGION" \
+                        --query 'services[0].taskDefinition' \
+                        --output text)
 
                     BACKEND_PREVIOUS=$(aws ecs describe-services \
-                      --cluster "$ECS_CLUSTER" \
-                      --services "$BACKEND_SERVICE" \
-                      --region "$AWS_REGION" \
-                      --query 'services[0].taskDefinition' \
-                      --output text)
+                        --cluster "$ECS_CLUSTER" \
+                        --services "$BACKEND_SERVICE" \
+                        --region "$AWS_REGION" \
+                        --query 'services[0].taskDefinition' \
+                        --output text)
 
                     for TASK_ARN in "$FRONTEND_PREVIOUS" "$BACKEND_PREVIOUS"; do
                         case "$TASK_ARN" in
@@ -119,7 +126,7 @@ pipeline {
 
                     echo "Rollback targets captured:"
                     echo "Frontend: $FRONTEND_PREVIOUS"
-                    echo "Backend:  $BACKEND_PREVIOUS"
+                    echo "Backend: $BACKEND_PREVIOUS"
 
                     DEPLOY_STARTED=1
 
@@ -129,23 +136,23 @@ pipeline {
                         ROLLBACK_FAILED=0
 
                         aws ecs update-service \
-                          --cluster "$ECS_CLUSTER" \
-                          --service "$FRONTEND_SERVICE" \
-                          --task-definition "$FRONTEND_PREVIOUS" \
-                          --region "$AWS_REGION"
+                            --cluster "$ECS_CLUSTER" \
+                            --service "$FRONTEND_SERVICE" \
+                            --task-definition "$FRONTEND_PREVIOUS" \
+                            --region "$AWS_REGION"
                         [ "$?" -eq 0 ] || ROLLBACK_FAILED=1
 
                         aws ecs update-service \
-                          --cluster "$ECS_CLUSTER" \
-                          --service "$BACKEND_SERVICE" \
-                          --task-definition "$BACKEND_PREVIOUS" \
-                          --region "$AWS_REGION"
+                            --cluster "$ECS_CLUSTER" \
+                            --service "$BACKEND_SERVICE" \
+                            --task-definition "$BACKEND_PREVIOUS" \
+                            --region "$AWS_REGION"
                         [ "$?" -eq 0 ] || ROLLBACK_FAILED=1
 
                         aws ecs wait services-stable \
-                          --cluster "$ECS_CLUSTER" \
-                          --services "$FRONTEND_SERVICE" "$BACKEND_SERVICE" \
-                          --region "$AWS_REGION"
+                            --cluster "$ECS_CLUSTER" \
+                            --services "$FRONTEND_SERVICE" "$BACKEND_SERVICE" \
+                            --region "$AWS_REGION"
                         [ "$?" -eq 0 ] || ROLLBACK_FAILED=1
 
                         if [ "$ROLLBACK_FAILED" -eq 0 ]; then
@@ -163,6 +170,7 @@ pipeline {
                         fi
                         exit "$EXIT_STATUS"
                     }
+
                     trap on_exit EXIT
 
                     deploy_service() {
@@ -171,29 +179,58 @@ pipeline {
                         SERVICE="$3"
                         IMAGE="$4"
                         PREVIOUS_TASK="$5"
+
                         TASK_FILE="task-$CONTAINER.json"
                         NEW_TASK_FILE="new-task-$CONTAINER.json"
 
                         echo "Preparing deployment for $SERVICE"
 
                         aws ecs describe-task-definition \
-                          --task-definition "$PREVIOUS_TASK" \
-                          --region "$AWS_REGION" \
-                          --query taskDefinition \
-                          --output json > "$TASK_FILE"
+                            --task-definition "$PREVIOUS_TASK" \
+                            --region "$AWS_REGION" \
+                            --query taskDefinition \
+                            --output json > "$TASK_FILE"
 
                         jq -e --arg CONTAINER "$CONTAINER" \
-                          '.containerDefinitions | any(.name == $CONTAINER)' \
-                          "$TASK_FILE" > /dev/null
+                            '.containerDefinitions | any(.name == $CONTAINER)' \
+                            "$TASK_FILE" > /dev/null
 
                         jq --arg IMAGE "$IMAGE" --arg CONTAINER "$CONTAINER" '
-                          .containerDefinitions |= map(
-                            if .name == $CONTAINER then .image = $IMAGE else . end
-                          )
-                          | del(
-                              .taskDefinitionArn, .revision, .status,
-                              .requiresAttributes, .compatibilities,
-                              .registeredAt, .registeredBy, .deregisteredAt
+                            .containerDefinitions |= map(
+                                if .name == $CONTAINER then
+                                    .image = $IMAGE
+                                    | if $CONTAINER == "backend" then
+                                        .environment = (
+                                            (.environment // [])
+                                            | map(select(
+                                                .name != "DB_HOST"
+                                                and .name != "DB_PORT"
+                                                and .name != "DB_NAME"
+                                            ))
+                                        )
+                                        | .secrets = (
+                                            (.secrets // [])
+                                            | map(select(
+                                                .name != "DB_USER"
+                                                and .name != "DB_PASSWORD"
+                                            ))
+                                        )
+                                    else
+                                        .
+                                    end
+                                else
+                                    .
+                                end
+                            )
+                            | del(
+                                .taskDefinitionArn,
+                                .revision,
+                                .status,
+                                .requiresAttributes,
+                                .compatibilities,
+                                .registeredAt,
+                                .registeredBy,
+                                .deregisteredAt
                             )
                         ' "$TASK_FILE" > "$NEW_TASK_FILE"
 
