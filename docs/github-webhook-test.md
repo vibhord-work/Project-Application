@@ -9,3 +9,6 @@ Validation:
 - GitHub webhook connectivity verified.
 - ALB listener rule configured for /github-webhook/.
 - Automatic Jenkins pipeline triggering pending verification.
+
+## Second Webhook Test
+Verify Jenkins automatically triggers after merging a PR into main.
