@@ -1,0 +1,388 @@
+name: Complete CI/CD Pipeline
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cicd-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: us-east-1
+  AWS_ACCOUNT_ID: "460249938865"
+  ECS_CLUSTER: project-poc-ecs-cluster
+  FRONTEND_REPO: project-poc-frontend
+  BACKEND_REPO: project-poc-backend
+  FRONTEND_SERVICE: project-poc-frontend-service
+  BACKEND_SERVICE: project-poc-backend-service
+
+jobs:
+  ci-cd:
+    name: Validate, Scan, Build and Deploy
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate Application
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f frontend/package-lock.json
+          test -f backend/package-lock.json
+          test -f frontend/Dockerfile
+          test -f backend/Dockerfile
+          echo "Application structure validated."
+
+      - name: SonarCloud Analysis
+        uses: SonarSource/sonarqube-scan-action@v6
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        with:
+          args: >
+            -Dsonar.projectKey=vibhord-work_HospitalDBMS-DevOps
+            -Dsonar.organization=vibhord-work
+            -Dsonar.host.url=https://sonarcloud.io
+            -Dsonar.sources=backend,frontend/src
+            -Dsonar.tests=backend/tests
+            -Dsonar.test.inclusions=backend/tests/**/*.js
+            -Dsonar.exclusions=backend/tests/**,backend/**/*.test.js,frontend/src/**/*.test.jsx,frontend/src/test/**
+            -Dsonar.qualitygate.wait=false
+
+      - name: SonarCloud Report
+        run: |
+          echo "SonarCloud analysis completed."
+          echo "https://sonarcloud.io/dashboard?id=vibhord-work_HospitalDBMS-DevOps"
+          echo "Developer quality findings are advisory."
+
+      - name: Set Image Tags
+        shell: bash
+        run: |
+          echo "IMAGE_TAG=build-${GITHUB_RUN_NUMBER}-${GITHUB_SHA}" >> "$GITHUB_ENV"
+
+      - name: Build Docker Images
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          docker build \
+            --build-arg NGINX_CONFIG=nginx.aws.conf \
+            -t "hospital-frontend:${IMAGE_TAG}" \
+            ./frontend
+
+          docker build \
+            -t "hospital-backend:${IMAGE_TAG}" \
+            ./backend
+
+      - name: Trivy Vulnerability Scans
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p reports
+          docker pull aquasec/trivy:0.68.2
+
+          for SERVICE in frontend backend; do
+            IMAGE="hospital-${SERVICE}:${IMAGE_TAG}"
+
+            for FORMAT in json table; do
+              EXTENSION=json
+              if [ "$FORMAT" = "table" ]; then
+                EXTENSION=txt
+              fi
+
+              docker run --rm \
+                -v /var/run/docker.sock:/var/run/docker.sock \
+                -v "$PWD/reports:/reports" \
+                -v trivy-cache:/root/.cache \
+                aquasec/trivy:0.68.2 image \
+                --scanners vuln \
+                --severity UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL \
+                --format "$FORMAT" \
+                --exit-code 0 \
+                --output "/reports/trivy-${SERVICE}.${EXTENSION}" \
+                "$IMAGE"
+            done
+
+            test -s "reports/trivy-${SERVICE}.json"
+            test -s "reports/trivy-${SERVICE}.txt"
+          done
+
+          echo "Trivy vulnerability reports generated successfully."
+
+      - name: Upload Trivy Reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-reports-${{ github.run_id }}
+          path: reports/trivy-*
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Configure AWS Credentials
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        shell: bash
+        run: |
+          set -euo pipefail
+          REGISTRY="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+          aws ecr get-login-password --region "$AWS_REGION" |
+            docker login --username AWS --password-stdin "$REGISTRY"
+
+      - name: Push Images to ECR
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        shell: bash
+        run: |
+          set -euo pipefail
+          REGISTRY="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+
+          docker tag "hospital-frontend:${IMAGE_TAG}" \
+            "$REGISTRY/$FRONTEND_REPO:$IMAGE_TAG"
+
+          docker tag "hospital-backend:${IMAGE_TAG}" \
+            "$REGISTRY/$BACKEND_REPO:$IMAGE_TAG"
+
+          docker push "$REGISTRY/$FRONTEND_REPO:$IMAGE_TAG"
+          docker push "$REGISTRY/$BACKEND_REPO:$IMAGE_TAG"
+
+      - name: Record and Verify Approved Images
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        shell: bash
+        run: |
+          set -euo pipefail
+          REGISTRY="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+
+          FRONTEND_DIGEST=$(aws ecr describe-images \
+            --repository-name "$FRONTEND_REPO" \
+            --image-ids imageTag="$IMAGE_TAG" \
+            --region "$AWS_REGION" \
+            --query 'imageDetails[0].imageDigest' --output text)
+
+          BACKEND_DIGEST=$(aws ecr describe-images \
+            --repository-name "$BACKEND_REPO" \
+            --image-ids imageTag="$IMAGE_TAG" \
+            --region "$AWS_REGION" \
+            --query 'imageDetails[0].imageDigest' --output text)
+
+          [[ "$FRONTEND_DIGEST" =~ ^sha256:[a-f0-9]{64}$ ]]
+          [[ "$BACKEND_DIGEST" =~ ^sha256:[a-f0-9]{64}$ ]]
+
+          jq -n \
+            --arg commit "$GITHUB_SHA" \
+            --arg tag "$IMAGE_TAG" \
+            --arg frontend "$REGISTRY/$FRONTEND_REPO@$FRONTEND_DIGEST" \
+            --arg backend "$REGISTRY/$BACKEND_REPO@$BACKEND_DIGEST" \
+            '{
+              git_commit: $commit,
+              image_tag: $tag,
+              frontend_image: $frontend,
+              backend_image: $backend
+            }' > approved-images.json
+
+          cat approved-images.json
+
+      - name: Upload Approved Image Manifest
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@v4
+        with:
+          name: approved-images-${{ github.run_id }}
+          path: approved-images.json
+          if-no-files-found: error
+
+      - name: Deploy to ECS with Automatic Rollback
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          REGISTRY="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+
+          FRONTEND_IMAGE=$(jq -er '.frontend_image' approved-images.json)
+          BACKEND_IMAGE=$(jq -er '.backend_image' approved-images.json)
+
+          validate_image() {
+            local IMAGE="$1"
+            local REPO="$2"
+            [[ "$IMAGE" =~ ^${REGISTRY}/${REPO}@sha256:[a-f0-9]{64}$ ]] || {
+              echo "Invalid image reference for $REPO"
+              exit 1
+            }
+
+            local DIGEST="${IMAGE##*@}"
+            local ACTUAL
+            ACTUAL=$(aws ecr describe-images \
+              --repository-name "$REPO" \
+              --image-ids imageDigest="$DIGEST" \
+              --region "$AWS_REGION" \
+              --query 'imageDetails[0].imageDigest' \
+              --output text)
+            test "$ACTUAL" = "$DIGEST"
+          }
+
+          validate_image "$FRONTEND_IMAGE" "$FRONTEND_REPO"
+          validate_image "$BACKEND_IMAGE" "$BACKEND_REPO"
+
+          FRONTEND_PREVIOUS=$(aws ecs describe-services \
+            --cluster "$ECS_CLUSTER" \
+            --services "$FRONTEND_SERVICE" \
+            --region "$AWS_REGION" \
+            --query 'services[0].taskDefinition' --output text)
+
+          BACKEND_PREVIOUS=$(aws ecs describe-services \
+            --cluster "$ECS_CLUSTER" \
+            --services "$BACKEND_SERVICE" \
+            --region "$AWS_REGION" \
+            --query 'services[0].taskDefinition' --output text)
+
+          [[ "$FRONTEND_PREVIOUS" == arn:aws:ecs:* ]]
+          [[ "$BACKEND_PREVIOUS" == arn:aws:ecs:* ]]
+
+          echo "Previous frontend task: $FRONTEND_PREVIOUS"
+          echo "Previous backend task: $BACKEND_PREVIOUS"
+
+          DEPLOY_STARTED=0
+
+          rollback() {
+            echo "Deployment failed. Restoring previous ECS task definitions."
+            local FAILED=0
+
+            aws ecs update-service \
+              --cluster "$ECS_CLUSTER" \
+              --service "$FRONTEND_SERVICE" \
+              --task-definition "$FRONTEND_PREVIOUS" \
+              --region "$AWS_REGION" >/dev/null || FAILED=1
+
+            aws ecs update-service \
+              --cluster "$ECS_CLUSTER" \
+              --service "$BACKEND_SERVICE" \
+              --task-definition "$BACKEND_PREVIOUS" \
+              --region "$AWS_REGION" >/dev/null || FAILED=1
+
+            aws ecs wait services-stable \
+              --cluster "$ECS_CLUSTER" \
+              --services "$FRONTEND_SERVICE" "$BACKEND_SERVICE" \
+              --region "$AWS_REGION" || FAILED=1
+
+            if [ "$FAILED" -eq 0 ]; then
+              echo "Rollback successful."
+            else
+              echo "Rollback incomplete. Manual intervention required."
+            fi
+          }
+
+          on_exit() {
+            local STATUS=$?
+            trap - EXIT
+            if [ "$STATUS" -ne 0 ] && [ "$DEPLOY_STARTED" -eq 1 ]; then
+              rollback
+            fi
+            exit "$STATUS"
+          }
+
+          trap on_exit EXIT
+
+          deploy_service() {
+            local CONTAINER="$1"
+            local SERVICE="$2"
+            local IMAGE="$3"
+            local PREVIOUS_TASK="$4"
+            local TASK_FILE="task-${CONTAINER}.json"
+            local NEW_TASK_FILE="new-task-${CONTAINER}.json"
+
+            aws ecs describe-task-definition \
+              --task-definition "$PREVIOUS_TASK" \
+              --region "$AWS_REGION" \
+              --query taskDefinition \
+              --output json > "$TASK_FILE"
+
+            jq -e --arg CONTAINER "$CONTAINER" \
+              '.containerDefinitions | any(.name == $CONTAINER)' \
+              "$TASK_FILE" >/dev/null
+
+            jq --arg IMAGE "$IMAGE" --arg CONTAINER "$CONTAINER" '
+              .containerDefinitions |= map(
+                if .name == $CONTAINER then
+                  .image = $IMAGE
+                  | if $CONTAINER == "backend" then
+                      .environment = (
+                        (.environment // [])
+                        | map(select(
+                            .name != "DB_HOST" and
+                            .name != "DB_PORT" and
+                            .name != "DB_NAME"
+                          ))
+                      )
+                      | .secrets = (
+                        (.secrets // [])
+                        | map(select(
+                            .name != "DB_USER" and
+                            .name != "DB_PASSWORD"
+                          ))
+                      )
+                    else . end
+                else . end
+              )
+              | del(
+                  .taskDefinitionArn,
+                  .revision,
+                  .status,
+                  .requiresAttributes,
+                  .compatibilities,
+                  .registeredAt,
+                  .registeredBy,
+                  .deregisteredAt
+                )
+            ' "$TASK_FILE" > "$NEW_TASK_FILE"
+
+            local NEW_TASK_ARN
+            NEW_TASK_ARN=$(aws ecs register-task-definition \
+              --cli-input-json "file://$NEW_TASK_FILE" \
+              --region "$AWS_REGION" \
+              --query 'taskDefinition.taskDefinitionArn' \
+              --output text)
+
+            [[ "$NEW_TASK_ARN" == arn:aws:ecs:* ]]
+
+            aws ecs update-service \
+              --cluster "$ECS_CLUSTER" \
+              --service "$SERVICE" \
+              --task-definition "$NEW_TASK_ARN" \
+              --region "$AWS_REGION" >/dev/null
+
+            aws ecs wait services-stable \
+              --cluster "$ECS_CLUSTER" \
+              --services "$SERVICE" \
+              --region "$AWS_REGION"
+
+            echo "$SERVICE deployed and stable."
+          }
+
+          DEPLOY_STARTED=1
+
+          deploy_service frontend "$FRONTEND_SERVICE" \
+            "$FRONTEND_IMAGE" "$FRONTEND_PREVIOUS"
+
+          deploy_service backend "$BACKEND_SERVICE" \
+            "$BACKEND_IMAGE" "$BACKEND_PREVIOUS"
+
+          DEPLOY_STARTED=0
+          trap - EXIT
+
+          echo "Both ECS services deployed successfully."
