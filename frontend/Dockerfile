@@ -15,7 +15,9 @@ RUN npm run build
 FROM nginx:stable-alpine
 
 # Apply current Alpine security updates to the runtime image.
-RUN apk upgrade --no-cache
+# Explicitly upgrade libxml2 to include the patched Alpine package.
+RUN apk update && apk upgrade --no-cache libxml2 \
+    && apk info -v libxml2
 
 COPY --from=builder /app/dist /usr/share/nginx/html
 ARG NGINX_CONFIG=nginx.conf
